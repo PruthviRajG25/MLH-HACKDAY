@@ -3,22 +3,69 @@
 from __future__ import annotations
 
 import argparse
+import getpass
+import shlex
+import subprocess
 import sys
 from pathlib import Path
+from typing import TextIO
 
 from .ask import ask_repository
-from .indexer import DEFAULT_MAX_FILE_BYTES, DEFAULT_MODEL, IndexResult, index_repository
-from .tracker import TrackerError, track_repository
+from .config import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL as DEFAULT_CHAT_MODEL,
+    DEFAULT_PROVIDER,
+    FIELDS,
+    config_path,
+    display_config,
+    load_config,
+    save_config,
+    storage_key,
+    validate,
+)
+from .diagnostics import run_diagnostics
+from .error_report import create_error_report
+from .evaluation import evaluate_retrieval
+from .failure_atlas import (
+    Incident,
+    list_incidents,
+    record_failure,
+    record_success,
+    save_diagnosis,
+    save_report_path,
+)
+from .indexer import DEFAULT_MAX_FILE_BYTES, DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL, IndexResult, index_repository
+from .tracker import TrackerError, find_repo_root, track_repository
+from .terminal_markdown import render_markdown
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codemate", description="Track a Git codebase locally.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("init", help="configure the AI provider for this user")
+    doctor = subparsers.add_parser("doctor", help="check AI configuration, API access, and the local index")
+    doctor.add_argument("--repo", type=Path, default=Path.cwd(), help="repository (default: current directory)")
+    evaluate = subparsers.add_parser("evaluate", help="measure retrieval against expected source files")
+    evaluate.add_argument("--repo", type=Path, default=Path.cwd(), help="repository (default: current directory)")
+    evaluate.add_argument("--file", type=Path, help="evaluation JSON (default: .codemate-eval.json in repository)")
+    evaluate.add_argument("--top-k", type=int, default=6, help="number of retrieved chunks per question")
+    config = subparsers.add_parser("config", help="view or change saved AI settings")
+    config_subparsers = config.add_subparsers(dest="config_action")
+    config_subparsers.add_parser("list", help="show saved AI settings")
+    set_config = config_subparsers.add_parser("set", help="change one saved AI setting")
+    set_config.add_argument("field", choices=FIELDS)
+    set_config.add_argument("value", nargs="?", help="omit for a hidden API key prompt")
+    unset_config = config_subparsers.add_parser("unset", help="remove a saved setting")
+    unset_config.add_argument("field", choices=FIELDS)
     track = subparsers.add_parser("track", help="snapshot current repository files into .index/")
     track.add_argument("--repo", type=Path, default=Path.cwd(), help="repository or subdirectory (default: current directory)")
     index = subparsers.add_parser("index", help="chunk and embed current text files locally")
     index.add_argument("--repo", type=Path, default=Path.cwd(), help="repository or subdirectory (default: current directory)")
-    index.add_argument("--model", default=DEFAULT_MODEL, help=f"local embedding model (default: {DEFAULT_MODEL})")
+    index.add_argument(
+        "--model",
+        default=DEFAULT_EMBEDDING_MODEL,
+        help=f"local embedding model (default: {DEFAULT_EMBEDDING_MODEL})",
+    )
     index.add_argument(
         "--max-file-bytes",
         type=int,
@@ -30,15 +77,15 @@ def _parser() -> argparse.ArgumentParser:
     ask.add_argument("question", help="question about this repository")
     ask.add_argument("--repo", type=Path, default=Path.cwd(), help="repository or subdirectory (default: current directory)")
     ask.add_argument("--top-k", type=int, default=6, help="number of retrieved chunks to send (default: 6)")
-    ask.add_argument("--model", help="chat model name (or set CODEMATE_MODEL in .env)")
+    ask.add_argument("--model", help="chat model name (overrides saved configuration)")
     ask.add_argument(
         "--provider",
         choices=("gemini", "openai-compatible"),
-        help="chat API provider (default: gemini; or set CODEMATE_PROVIDER in .env)",
+        help="chat API provider (overrides saved configuration)",
     )
     ask.add_argument(
         "--base-url",
-        help="provider API base URL (or set CODEMATE_BASE_URL in .env)",
+        help="provider API base URL (overrides saved configuration)",
     )
     ask.add_argument(
         "--api-key-env",
@@ -46,11 +93,289 @@ def _parser() -> argparse.ArgumentParser:
         metavar="ENV_VAR",
         help="environment variable name for the API key (default: GEMINI_API_KEY)",
     )
+    run = subparsers.add_parser(
+        "run",
+        help="run a repository command and diagnose failures with the indexed codebase",
+    )
+    run.add_argument("--repo", type=Path, default=Path.cwd(), help="working directory (default: current directory)")
+    run.add_argument("run_command", nargs=argparse.REMAINDER, help="command and arguments to run")
+    failures = subparsers.add_parser("failures", help="show the repository's local failure history")
+    failures.add_argument("--repo", type=Path, default=Path.cwd(), help="repository (default: current directory)")
+    failures.add_argument("--all", action="store_true", help="include resolved incidents")
     return parser
+
+
+def _prompt_value(label: str, default: str) -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{label}{suffix}: ").strip()
+    return value or default
+
+
+def _write_command_output(stream: TextIO, value: str) -> None:
+    if not value:
+        return
+    stream.write(value)
+    if not value.endswith("\n"):
+        stream.write("\n")
+
+
+def _diagnose_failed_command(
+    command: list[str], cwd: Path, stdout: str, stderr: str, exit_code: int,
+    incident: Incident | None = None,
+) -> None:
+    limit = 12_000
+    combined_output = (
+        f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+        if stdout
+        else f"stderr:\n{stderr}"
+    )
+    if len(combined_output) > limit:
+        combined_output = "[Earlier command output omitted. Showing the final portion.]\n" + combined_output[-limit:]
+    question = (
+        f"Diagnose this failed repository command. Command: {shlex.join(command)}. "
+        f"Exit code: {exit_code}. Use the error output to locate likely causes in the retrieved code. "
+        "Explain the likely cause, cite repository evidence, and suggest the next debugging step. "
+        "If the evidence is insufficient, say so.\n\nCommand output:\n"
+        f"{combined_output}"
+    )
+    if incident and incident.diagnosis:
+        question += (
+            "\n\nFailure Atlas history: this failure matches an earlier incident "
+            f"seen {incident.occurrence_count - 1} time(s). Its previous diagnosis was:\n"
+            f"{incident.diagnosis}\nTreat that diagnosis as historical context, not proof; "
+            "re-check it against the current output and retrieved code."
+        )
+    print("\nCodemate diagnosis:")
+    try:
+        answer, hits, embedding_model = ask_repository(question, cwd)
+    except TrackerError as exc:
+        print(f"Could not diagnose this failure: {exc}", file=sys.stderr)
+        return
+    print(render_markdown(answer))
+    if incident:
+        try:
+            save_diagnosis(cwd, incident.id, answer)
+        except TrackerError as exc:
+            print(f"Could not save diagnosis to Failure Atlas: {exc}", file=sys.stderr)
+    print(f"\nSources (retrieved locally with {embedding_model}):")
+    for hit in hits:
+        detail = f"; {hit.language}" if hit.language else ""
+        if hit.symbol:
+            detail += f"; {hit.symbol}"
+        print(f"[{hit.label}] {hit.path}:{hit.start_line}-{hit.end_line} (score {hit.score:.3f}{detail})")
+    if not sys.stdin.isatty():
+        return
+    try:
+        choice = input("\nCreate an error report under report/? [y/N]: ").strip().lower()
+    except EOFError:
+        return
+    if choice not in {"y", "yes"}:
+        return
+    try:
+        report_path = create_error_report(
+            cwd,
+            command,
+            exit_code,
+            combined_output,
+            answer,
+            hits,
+            embedding_model,
+        )
+    except TrackerError as exc:
+        print(f"Could not create error report: {exc}", file=sys.stderr)
+        return
+    print(f"Error report saved to {report_path}")
+    if incident:
+        try:
+            save_report_path(cwd, incident.id, report_path)
+        except TrackerError as exc:
+            print(f"Could not link report to Failure Atlas: {exc}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "failures":
+        try:
+            incidents = list_incidents(args.repo, include_resolved=args.all)
+        except TrackerError as exc:
+            print(f"codemate: error: {exc}", file=sys.stderr)
+            return 2
+        if not incidents:
+            print("No active incidents. Use `codemate failures --all` to include resolved history.")
+            return 0
+        for incident in incidents:
+            short_id = incident.id[:8]
+            commit = f" · commit {incident.last_commit}" if incident.last_commit else ""
+            print(
+                f"{incident.status.upper():8} {short_id} · seen {incident.occurrence_count} "
+                f"time(s) · {incident.last_seen}{commit}"
+            )
+            print(f"  Command: {incident.command}")
+            signature = incident.signature.replace("\n", " | ")
+            print(f"  Failure: {signature[:220]}")
+            if incident.diagnosis:
+                first_line = next((line.strip() for line in incident.diagnosis.splitlines() if line.strip()), "")
+                if first_line:
+                    print(f"  Last diagnosis: {first_line[:220]}")
+            if incident.report_path:
+                print(f"  Report: {incident.report_path}")
+        return 0
+    if args.command == "doctor":
+        try:
+            results = run_diagnostics(args.repo)
+        except TrackerError as exc:
+            print(f"codemate: error: {exc}", file=sys.stderr)
+            return 2
+        for ok, message in results:
+            print(f"{'OK' if ok else 'CHECK'}  {message}")
+        return 0 if all(ok for ok, _ in results) else 1
+    if args.command == "evaluate":
+        try:
+            results, total = evaluate_retrieval(args.repo, args.file, args.top_k)
+        except TrackerError as exc:
+            print(f"codemate: error: {exc}", file=sys.stderr)
+            return 2
+        hits = 0
+        reciprocal_ranks = []
+        for number, result in enumerate(results, start=1):
+            rank = result["rank"]
+            if rank is not None:
+                hits += 1
+                reciprocal_ranks.append(1 / rank)
+                status = f"hit at {rank}"
+            else:
+                reciprocal_ranks.append(0.0)
+                status = "miss"
+            print(f"{number}. {status}: {result['question']}")
+            if rank is None:
+                print(f"   expected one of: {', '.join(result['expected'])}")
+                if result.get("error"):
+                    print(f"   {result['error']}")
+        print(f"Recall@{args.top_k}: {hits}/{total} ({hits / total:.0%})")
+        print(f"MRR@{args.top_k}: {sum(reciprocal_ranks) / total:.3f}")
+        return 0 if hits == total else 1
+    if args.command == "run":
+        command = args.run_command
+        if command and command[0] == "--":
+            command = command[1:]
+        if not command:
+            print("codemate: error: provide a command to run, for example `codemate run pytest`", file=sys.stderr)
+            return 2
+        try:
+            result = subprocess.run(
+                command,
+                cwd=args.repo,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                check=False,
+            )
+            stdout, stderr, exit_code = result.stdout, result.stderr, result.returncode
+        except OSError as exc:
+            stdout, stderr, exit_code = "", str(exc), 127
+        _write_command_output(sys.stdout, stdout)
+        if exit_code == 0:
+            _write_command_output(sys.stderr, stderr)
+            try:
+                record_success(args.repo, command)
+            except TrackerError:
+                pass
+            return 0
+        if stderr:
+            _write_command_output(sys.stderr, stderr)
+        else:
+            print(f"Command exited with code {exit_code}.", file=sys.stderr)
+            stderr = f"Command exited with code {exit_code}."
+        sys.stdout.flush()
+        sys.stderr.flush()
+        try:
+            repo_root = find_repo_root(args.repo.resolve())
+            if (repo_root / ".index" / "vectors.sqlite3").is_file():
+                updated = index_repository(repo_root)
+                if updated.added_files or updated.updated_files or updated.removed_files:
+                    print("Updated the local code index before diagnosis.", file=sys.stderr)
+        except TrackerError as exc:
+            print(f"Could not refresh the local code index: {exc}", file=sys.stderr)
+        incident = None
+        try:
+            incident = record_failure(
+                args.repo, command, exit_code,
+                f"stdout:\n{stdout}\n\nstderr:\n{stderr}",
+            )
+            print(
+                f"Failure Atlas: {incident.status} incident {incident.id[:8]} "
+                f"(seen {incident.occurrence_count} time(s))."
+            )
+        except TrackerError as exc:
+            print(f"Could not update Failure Atlas: {exc}", file=sys.stderr)
+        _diagnose_failed_command(command, args.repo, stdout, stderr, exit_code, incident)
+        return exit_code if exit_code > 0 else 128 + abs(exit_code)
+    if args.command == "init":
+        try:
+            current = load_config()
+            previous_provider = current.get("provider", DEFAULT_PROVIDER)
+            provider = _prompt_value(
+                "Provider [gemini/openai-compatible]", previous_provider
+            )
+            validate("provider", provider)
+            same_provider = provider == previous_provider
+            default_model = (
+                current.get("model", "") if same_provider
+                else DEFAULT_CHAT_MODEL if provider == "gemini" else ""
+            )
+            model = _prompt_value("Model", default_model)
+            validate("model", model)
+            default_url = current.get("base_url", "") if same_provider else ""
+            if not default_url:
+                default_url = DEFAULT_BASE_URL if provider == "gemini" else "https://api.openai.com/v1"
+            base_url = _prompt_value("API base URL", default_url)
+            validate("base-url", base_url)
+            api_key = getpass.getpass("API key (leave blank to keep current): ")
+            updated = {**current, "provider": provider, "model": model, "base_url": base_url}
+            if api_key:
+                updated["api_key"] = api_key
+            elif not updated.get("api_key"):
+                raise TrackerError("An API key is required. Run `codemate config set api-key` to add one.")
+            path = save_config(updated)
+        except (TrackerError, EOFError, KeyboardInterrupt) as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                print("\nInitialization cancelled.", file=sys.stderr)
+                return 130
+            print(f"codemate: error: {exc}", file=sys.stderr)
+            return 2
+        print(f"AI configuration saved to {path}")
+        print("Use `codemate config set FIELD` to change a setting.")
+        return 0
+    if args.command == "config":
+        action = args.config_action or "list"
+        try:
+            values = load_config()
+            if action == "list":
+                print(f"Configuration: {config_path()}")
+                print("\n".join(display_config(values)))
+                return 0
+            if action == "set":
+                if args.field == "api-key":
+                    if args.value is not None:
+                        raise TrackerError("Omit the API key value to enter it at the hidden prompt.")
+                    value = getpass.getpass("API key: ")
+                elif args.value is not None:
+                    value = args.value
+                else:
+                    raise TrackerError(f"Provide a value for {args.field}.")
+                validate(args.field, value)
+                values[storage_key(args.field)] = value
+            elif action == "unset":
+                values.pop(storage_key(args.field), None)
+            path = save_config(values)
+        except (TrackerError, EOFError, KeyboardInterrupt) as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                print("\nConfiguration change cancelled.", file=sys.stderr)
+                return 130
+            print(f"codemate: error: {exc}", file=sys.stderr)
+            return 2
+        print(f"Updated {args.field} in {path}")
+        return 0
     if args.command == "track":
         try:
             result = track_repository(args.repo)
@@ -92,10 +417,16 @@ def main(argv: list[str] | None = None) -> int:
         except TrackerError as exc:
             print(f"codemate: error: {exc}", file=sys.stderr)
             return 2
-        print(answer)
+        print(render_markdown(answer))
         print(f"\nSources (retrieved locally with {embedding_model}):")
         for hit in hits:
-            print(f"[{hit.label}] {hit.path}:{hit.start_line}-{hit.end_line} (score {hit.score:.3f})")
+            detail = f"; {hit.language}" if hit.language else ""
+            if hit.symbol:
+                detail += f"; {hit.symbol}"
+            print(
+                f"[{hit.label}] {hit.path}:{hit.start_line}-{hit.end_line} "
+                f"(score {hit.score:.3f}{detail})"
+            )
         return 0
     return 2
 

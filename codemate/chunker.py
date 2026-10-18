@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+
+_DECLARATION_LINE = re.compile(
+    r"(?m)^\s*(?:(?:async\s+)?(?:def|function|fn|func)\b|class\b|"
+    r"(?:export\s+)(?:async\s+)?(?:function|class)\b)"
+)
 
 
 @dataclass(frozen=True)
@@ -35,8 +42,13 @@ def chunk_text(text: str, max_chars: int = 1800, overlap_chars: int = 240) -> li
         hard_end = min(start + max_chars, length)
         end = hard_end
         if hard_end < length:
+            declaration = None
+            for match in _DECLARATION_LINE.finditer(text, start + max_chars // 2, hard_end):
+                declaration = match.start()
+            if declaration is not None and declaration > start:
+                end = declaration
             newline = text.rfind("\n", start, hard_end)
-            if newline >= start + max_chars // 2:
+            if end == hard_end and newline >= start + max_chars // 2:
                 end = newline + 1
 
         piece = text[start:end]

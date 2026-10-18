@@ -57,27 +57,36 @@ kept with each chunk for later citations. The tracker still records every
 Git-visible file, while embedding skips symlinks, binary or non-UTF-8 files,
 and files larger than 1 MB. Only changed files are chunked and embedded again.
 Chunks target 1,200 characters with 160 characters of overlap and prefer
-newline boundaries; these are initial defaults, not language-aware syntax
-boundaries. Changing the model or chunk settings rebuilds the derived vector
-index.
+newline and common function/class boundaries. Each chunk records its language
+and nearest recognized symbol where available. Changing the model or chunk
+settings rebuilds the derived vector index.
 
 ## Ask questions
 
-Gemma 4 is the default chat model, served through Google's Gemini API. Create a
-`.env` file in the repository root from the example and add your Google AI
-Studio API key. Ensure `.env` is listed in that repository's `.gitignore`;
-Codemate skips `.env` files during embedding:
+Gemma 4 is the default chat model, served through Google's Gemini API. Configure
+the provider once for your user account:
 
 ```sh
-cp .env.example .env
+codemate init
 ```
 
-The example uses `gemma-4-26b-a4b-it` and the Gemini API endpoint. Google also
-lists `gemma-4-31b-it` as a hosted Gemma 4 model. Set `GEMINI_API_KEY` in
-`.env`. Shell environment variables override `.env`, and `--model` or
-`--base-url` can override settings for one command. To use another
-OpenAI-compatible provider, set `CODEMATE_PROVIDER=openai-compatible`, its base
-URL and model, and choose its key variable with `--api-key-env`.
+The setup prompts for provider, model, endpoint, and API key. Settings are
+saved outside the repository in `~/.config/codemate/config.json` (or
+`$XDG_CONFIG_HOME/codemate/config.json`), with private file permissions. To
+review or change settings later:
+
+```sh
+codemate config list
+codemate config set model gemma-4-31b-it
+codemate config set api-key
+codemate config unset api-key
+```
+
+The API key prompt is hidden. Avoid passing a key as a command argument because
+shell history may retain it. The example model is `gemma-4-26b-a4b-it`; another
+hosted Gemma 4 model is `gemma-4-31b-it`. CLI flags override saved settings,
+and environment variables override saved settings. Existing repository `.env`
+settings remain a fallback for compatibility.
 
 Then ask a question:
 
@@ -85,10 +94,75 @@ Then ask a question:
 codemate ask "Where is authentication handled?"
 ```
 
+To run a command and diagnose it automatically if it fails, use `codemate run`:
+
+```sh
+codemate run pytest -q
+codemate run -- npm test
+```
+
+Codemate prints the command output and error first, then retrieves relevant code
+and asks the configured model for a diagnosis. Before diagnosing, it updates an
+existing local index so newly added or changed files can be retrieved. The
+wrapper returns the original command's exit status. It executes arguments directly without a shell; for
+shell syntax, pass a shell explicitly (for example,
+`codemate run sh -c 'make check'`). On failure, Codemate sends the command and up to the final 12,000
+characters of its output to the configured AI provider along with retrieved
+repository excerpts. Avoid including secrets in command arguments or logs.
+After showing a diagnosis in an interactive terminal, Codemate asks whether to
+save a Markdown report containing the command, captured output, diagnosis, and
+retrieved excerpts. Reports go into the repository's `report/` directory and
+are ignored by Git and future indexing by default.
+
+Failed commands are also recorded in a local Failure Atlas at
+`.index/failures.sqlite3`. It groups failures by a normalized output signature
+and the exact command, tracks occurrence counts and the latest Git `HEAD` commit, and
+stores the latest diagnosis. When a matching failure returns, Codemate gives
+the previous diagnosis to the model as historical context and asks it to
+re-check that diagnosis against current evidence. Saving a report links it to
+the incident. A successful run resolves active incidents for that exact
+command; normal successful runs remain quiet. View active incidents with
+`codemate failures`; include resolved incidents with:
+
+```sh
+codemate failures --all
+```
+
+The history stays local alongside the index and can be removed by
+deleting `.index/failures.sqlite3`.
+
 Codemate embeds the question locally with the same model used to build the
 index, retrieves the closest chunks, and sends only those excerpts and the
 question to the configured chat endpoint. The model is instructed to treat
 repository text as untrusted and cite the retrieved source labels. Codemate
-also prints the exact source paths and line ranges it retrieved. The first
-version uses a local cosine scan of the SQLite vectors; it does not yet use an
-approximate-nearest-neighbor index or hybrid keyword search.
+renders common Markdown in the terminal, including headings, lists, code, and
+tables; it uses color only for interactive terminals and honors `NO_COLOR`.
+Codemate also prints the exact source paths and line ranges it retrieved. Retrieval
+combines vector similarity with keyword matching, filters overlapping duplicate
+chunks, and reports when no result clears its relevance threshold. Large
+indexes use batched NumPy scoring when NumPy is available; retrieval still
+compares against the full vector set, so an approximate-nearest-neighbor index
+may be worthwhile for very large repositories.
+
+Use `codemate doctor` to inspect configuration and index status and make a
+read-only API model check. It reports only whether a key is configured, never
+the key itself. The check sends an authenticated GET request to the configured
+provider, without generating a model response.
+
+To measure retrieval changes, keep representative questions and the files that
+should answer them in `.codemate-eval.json`:
+
+```json
+{
+  "cases": [
+    {
+      "question": "How are tracked files discovered?",
+      "expected_paths": ["codemate/tracker.py"]
+    }
+  ]
+}
+```
+
+Run `codemate evaluate` to see Recall@k and mean reciprocal rank (MRR@k).
+Codemate includes a starter evaluation set for its own codebase; use
+`codemate evaluate --file path/to/cases.json` for another set.
