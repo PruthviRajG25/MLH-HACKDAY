@@ -15,6 +15,9 @@ from .tracker import TrackerError
 DEFAULT_PROVIDER = "gemini"
 DEFAULT_MODEL = "gemma-4-26b-a4b-it"
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1"
+OLLAMA_API_KEY = "ollama"
+PROVIDERS = ("gemini", "openai-compatible", "ollama")
 FIELDS = ("provider", "model", "base-url", "api-key")
 
 
@@ -64,8 +67,8 @@ def storage_key(field: str) -> str:
 
 
 def validate(field: str, value: str) -> None:
-    if field == "provider" and value not in {"gemini", "openai-compatible"}:
-        raise TrackerError("Provider must be 'gemini' or 'openai-compatible'.")
+    if field == "provider" and value not in PROVIDERS:
+        raise TrackerError("Provider must be 'gemini', 'openai-compatible', or 'ollama'.")
     if not value.strip():
         raise TrackerError(f"{field} cannot be empty.")
     if field == "base-url" and not re.match(r"^https?://", value):

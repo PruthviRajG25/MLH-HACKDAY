@@ -1,17 +1,38 @@
-# Codemate
+<p align="center">
+  <img src="assets/codemate-mark.svg" alt="Codemate logo" width="88" height="88">
+</p>
 
-**A retrieval-augmented coding assistant powered by Gemma 4, an open-weight AI model.**
+<h1 align="center">Codemate</h1>
+
+<p align="center"><strong>A repository-grounded AI coding assistant powered by RAG and open-weight models.</strong></p>
+
+<p align="center">
+  <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-2ea44f?style=for-the-badge">
+  <img alt="Python 3.10 to 3.14" src="https://img.shields.io/badge/Python-3.10--3.14-3776AB?style=for-the-badge&logo=python&logoColor=white">
+  <img alt="Retrieval Augmented Generation" src="https://img.shields.io/badge/topic-RAG-6f42c1?style=for-the-badge">
+  <img alt="Open weight AI" src="https://img.shields.io/badge/topic-Open--Weight%20AI-0a7f68?style=for-the-badge">
+  <img alt="Local AI with Ollama" src="https://img.shields.io/badge/topic-Local%20AI%20%7C%20Ollama-20232a?style=for-the-badge">
+  <img alt="Gemma 4" src="https://img.shields.io/badge/topic-Gemma%204-4285F4?style=for-the-badge">
+</p>
 
 Codemate uses **RAG (retrieval-augmented generation)** to find relevant code in a
-local repository index before asking Gemma 4 to answer questions or diagnose
-command failures. It cites the source files behind its answers, remembers
-recurring failures, checks for likely Git push/pull conflicts, and can propose
-code repairs for the developer to review and approve.
+local repository index before asking your configured model to answer questions
+or diagnose command failures. Use a local open-weight model through Ollama, a
+hosted OpenAI-compatible model, or Gemma 4 through Gemini. It cites the source
+files behind its answers, remembers recurring failures, checks for likely Git
+push/pull conflicts, and can propose code repairs for the developer to review
+and approve.
 
-The default Gemma 4 model is an open-weight model accessed through Google's
-Gemini API; inference is hosted, not run locally. Repository tracking,
-embeddings, and retrieval run locally, and Codemate sends selected code
-excerpts and relevant prompts to the configured chat provider.
+Gemma 4 through Gemini is the default; inference for that option is hosted.
+With a local Ollama model, inference also runs on your computer. Repository
+tracking, embeddings, and retrieval run locally in either case. Codemate sends
+selected code excerpts and relevant prompts to the configured chat provider;
+when that provider is local Ollama, those requests go to your local server.
+
+> **No premium AI subscription required:** connect a compatible open-weight
+> model through Ollama and run inference on your own computer. No hosted model
+> subscription or provider API key is needed for local inference. Hosted AI
+> providers remain available when you prefer them.
 
 > **Hacktoberfest 2026 · Best Use of Gemma** — Codemate puts Gemma 4 at the
 > answer and diagnosis stage of a local RAG workflow, grounded in retrieved
@@ -54,8 +75,9 @@ codemate init
 
 `codemate init` saves the AI provider settings for your user account. It is
 separate from the project and does not read the project's `.env` file. Choose
-Gemini for the default Gemma 4 model, or `openai-compatible` for a compatible
-endpoint hosted locally or remotely. For example, a local OpenAI-compatible
+Gemini for the default Gemma 4 model, `ollama` for a local Ollama server, or
+`openai-compatible` for another compatible endpoint hosted locally or remotely.
+For example, a local OpenAI-compatible
 server might use:
 
 ```text
@@ -66,8 +88,8 @@ API key: <the key required by that endpoint>
 ```
 
 Use the actual model name, endpoint URL, and key for your AI service. Codemate
-supports Gemini and OpenAI-compatible chat APIs; a model/service must expose
-one of those APIs to connect. You can change the saved settings later with
+supports Gemini, Ollama, and OpenAI-compatible chat APIs; a model/service must
+expose one of those APIs to connect. You can change the saved settings later with
 `codemate init` or `codemate config set`.
 
 Codemate indexes Git repositories. If your project was cloned with Git, it is
@@ -197,12 +219,14 @@ The indexer chunks supported text files, creates embeddings locally with
 `BAAI/bge-small-en-v1.5`, and stores chunks, vectors, and source locations in
 `.index/vectors.sqlite3`. Only changed files need to be embedded again.
 
-## Gemma 4 and model configuration
+## AI providers and model configuration
 
-Gemma 4 is the default chat model and powers Codemate's repository Q&A,
-diagnostics, conflict explanations, and repair-agent reasoning. The default
-configuration uses the Gemini API; **model inference is not local**. Local
-tracking, embeddings, retrieval, and failure history stay on the machine.
+Gemma 4 through Gemini is the default chat setup. Codemate also supports local
+models served by Ollama and hosted services that implement the OpenAI chat
+completions API. The same configured provider is used for repository Q&A,
+diagnostics, conflict explanations, and repair-agent reasoning. A local Ollama
+configuration keeps model inference on your computer; a hosted provider sends
+the prompt and selected code excerpts to that provider.
 
 ```sh
 codemate config list
@@ -211,10 +235,25 @@ codemate config set api-key
 codemate config unset api-key
 ```
 
-`codemate init` can also reconfigure the provider interactively. Codemate
-supports Gemini and OpenAI-compatible chat endpoints. API keys are hidden when
-entered and saved with private file permissions. Do not put secrets in command
-arguments or diagnostic output.
+`codemate init` can configure or change the provider interactively. For a local
+Ollama model, install and start Ollama, pull a model, then choose `ollama` in
+Codemate's setup. For example:
+
+```sh
+ollama pull qwen3:8b
+codemate init
+```
+
+At the prompts, enter `ollama` for the provider and `qwen3:8b` for the model.
+The default API base URL is `http://localhost:11434/v1`. Codemate supplies the
+required `ollama` API-key value automatically; the local Ollama server ignores
+it. Make sure Ollama is running and the selected model is available locally.
+Model size and speed depend on your computer's resources.
+
+For another local or hosted compatible service, choose `openai-compatible` and
+enter its model, API base URL, and API key. For hosted services, the key is
+hidden when entered and saved with private file permissions. Do not put secrets
+in command arguments or diagnostic output.
 
 When you ask a question or diagnose a failure, Codemate sends the relevant
 prompt and retrieved code excerpts to the configured chat provider. For a
@@ -225,7 +264,7 @@ logs before sending them to any hosted model.
 
 | Command | Purpose |
 | --- | --- |
-| `codemate init` | Configure provider, model, endpoint, and API key. |
+| `codemate init` | Configure Gemini, Ollama, or an OpenAI-compatible provider. |
 | `codemate config list` | Show saved settings without revealing the API key. |
 | `codemate config set model MODEL` | Change the saved chat model. |
 | `codemate config set api-key` | Set or rotate the key using a hidden prompt. |
@@ -343,12 +382,15 @@ codemate init
 ```
 
 Follow the prompts for provider, model, endpoint, and API key. Choose Gemini
-for the default Gemma 4 setup, or `openai-compatible` for a local or hosted
-endpoint that implements the OpenAI chat completions API. For example, a local
-server may use `http://localhost:PORT/v1`; enter the model name and key expected
-by that server. The API key prompt is hidden, and settings are saved in your
-Windows user configuration—not in the project folder. You only need to do this
-once per Windows user account, and can change it later with `codemate init`.
+for the default Gemma 4 setup, `ollama` for a local Ollama server, or
+`openai-compatible` for another local or hosted endpoint that implements the
+OpenAI chat completions API. With Ollama, the base URL defaults to
+`http://localhost:11434/v1`; Codemate fills its ignored API key automatically.
+For another server, enter the model name, base URL (often
+`http://localhost:PORT/v1` for a local service), and its API key. Hosted API
+keys are entered in a hidden prompt. Settings are saved in your Windows user
+configuration—not in the project folder. You only need to configure once per
+Windows user account, and can change it later with `codemate init`.
 
 #### 5. Open the project you want Codemate to understand
 

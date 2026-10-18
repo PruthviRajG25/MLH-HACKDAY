@@ -15,8 +15,11 @@ from .agent import apply_changes, repair_repository, render_diff
 from .config import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL as DEFAULT_CHAT_MODEL,
+    DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_PROVIDER,
     FIELDS,
+    OLLAMA_API_KEY,
+    PROVIDERS,
     config_path,
     display_config,
     load_config,
@@ -82,7 +85,7 @@ def _parser() -> argparse.ArgumentParser:
     ask.add_argument("--model", help="chat model name (overrides saved configuration)")
     ask.add_argument(
         "--provider",
-        choices=("gemini", "openai-compatible"),
+        choices=PROVIDERS,
         help="chat API provider (overrides saved configuration)",
     )
     ask.add_argument(
@@ -525,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
             current = load_config()
             previous_provider = current.get("provider", DEFAULT_PROVIDER)
             provider = _prompt_value(
-                "Provider [gemini/openai-compatible]", previous_provider
+                "Provider [gemini/openai-compatible/ollama]", previous_provider
             )
             validate("provider", provider)
             same_provider = provider == previous_provider
@@ -537,11 +540,25 @@ def main(argv: list[str] | None = None) -> int:
             validate("model", model)
             default_url = current.get("base_url", "") if same_provider else ""
             if not default_url:
-                default_url = DEFAULT_BASE_URL if provider == "gemini" else "https://api.openai.com/v1"
+                default_url = (
+                    DEFAULT_BASE_URL if provider == "gemini"
+                    else DEFAULT_OLLAMA_BASE_URL if provider == "ollama"
+                    else "https://api.openai.com/v1"
+                )
             base_url = _prompt_value("API base URL", default_url)
             validate("base-url", base_url)
-            api_key = getpass.getpass("API key (leave blank to keep current): ")
-            updated = {**current, "provider": provider, "model": model, "base_url": base_url}
+            api_key = (
+                OLLAMA_API_KEY if provider == "ollama"
+                else getpass.getpass(
+                    "API key (leave blank to keep current): " if same_provider else "API key: "
+                )
+            )
+            updated = {
+                **(current if same_provider else {}),
+                "provider": provider,
+                "model": model,
+                "base_url": base_url,
+            }
             if api_key:
                 updated["api_key"] = api_key
             elif not updated.get("api_key"):

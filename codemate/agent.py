@@ -19,7 +19,14 @@ import urllib.request
 import certifi
 
 from .ask import DEFAULT_CHAT_BASE_URL, DEFAULT_GEMINI_BASE_URL, _load_dotenv, retrieve
-from .config import DEFAULT_MODEL, DEFAULT_PROVIDER, load_config
+from .config import (
+    DEFAULT_MODEL,
+    DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_PROVIDER,
+    OLLAMA_API_KEY,
+    PROVIDERS,
+    load_config,
+)
 from .tracker import TrackerError, find_repo_root
 
 
@@ -329,8 +336,8 @@ def repair_repository(
     dotenv = _load_dotenv(root / ".env")
     saved = load_config()
     provider = (os.environ.get("CODEMATE_PROVIDER") or saved.get("provider") or dotenv.get("CODEMATE_PROVIDER") or DEFAULT_PROVIDER).lower()
-    if provider not in {"gemini", "openai-compatible"}:
-        raise TrackerError("CODEMATE_PROVIDER must be 'gemini' or 'openai-compatible'.")
+    if provider not in PROVIDERS:
+        raise TrackerError("Unsupported chat provider. Choose gemini, openai-compatible, or ollama.")
     model = os.environ.get("CODEMATE_MODEL") or saved.get("model") or dotenv.get("CODEMATE_MODEL")
     if not model and provider == "gemini":
         model = DEFAULT_MODEL
@@ -338,9 +345,15 @@ def repair_repository(
         raise TrackerError("Configure a model with `codemate init` or `codemate config set model`.")
     base_url = (
         os.environ.get("CODEMATE_BASE_URL") or saved.get("base_url") or dotenv.get("CODEMATE_BASE_URL")
-        or (DEFAULT_GEMINI_BASE_URL if provider == "gemini" else DEFAULT_CHAT_BASE_URL)
+        or (
+            DEFAULT_GEMINI_BASE_URL if provider == "gemini"
+            else DEFAULT_OLLAMA_BASE_URL if provider == "ollama"
+            else DEFAULT_CHAT_BASE_URL
+        )
     )
     api_key = os.environ.get("GEMINI_API_KEY") or saved.get("api_key") or dotenv.get("GEMINI_API_KEY")
+    if provider == "ollama" and not api_key:
+        api_key = OLLAMA_API_KEY
     if not api_key:
         raise TrackerError("No API key is configured. Run `codemate init` or `codemate config set api-key`.")
 

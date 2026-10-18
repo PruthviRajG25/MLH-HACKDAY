@@ -20,7 +20,15 @@ from pathlib import Path
 from typing import Any
 
 from .indexer import _load_fastembed
-from .config import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_PROVIDER, load_config
+from .config import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_PROVIDER,
+    OLLAMA_API_KEY,
+    PROVIDERS,
+    load_config,
+)
 from .tracker import TrackerError, find_repo_root
 
 
@@ -379,8 +387,8 @@ def ask_repository(
         or dotenv.get("CODEMATE_PROVIDER")
         or DEFAULT_PROVIDER
     ).lower()
-    if configured_provider not in {"gemini", "openai-compatible"}:
-        raise TrackerError("CODEMATE_PROVIDER must be 'gemini' or 'openai-compatible'.")
+    if configured_provider not in PROVIDERS:
+        raise TrackerError("Unsupported chat provider. Choose gemini, openai-compatible, or ollama.")
     chat_model = (
         model
         or os.environ.get("CODEMATE_MODEL")
@@ -398,9 +406,15 @@ def ask_repository(
         or os.environ.get("CODEMATE_BASE_URL")
         or saved.get("base_url")
         or dotenv.get("CODEMATE_BASE_URL")
-        or (DEFAULT_GEMINI_BASE_URL if configured_provider == "gemini" else DEFAULT_CHAT_BASE_URL)
+        or (
+            DEFAULT_GEMINI_BASE_URL if configured_provider == "gemini"
+            else DEFAULT_OLLAMA_BASE_URL if configured_provider == "ollama"
+            else DEFAULT_CHAT_BASE_URL
+        )
     )
     api_key = os.environ.get(api_key_env) or saved.get("api_key") or dotenv.get(api_key_env)
+    if configured_provider == "ollama" and not api_key:
+        api_key = OLLAMA_API_KEY
     if not api_key:
         raise TrackerError(
             f"No API key is configured. Run `codemate init` or `codemate config set api-key` "

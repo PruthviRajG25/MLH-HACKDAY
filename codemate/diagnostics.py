@@ -18,7 +18,15 @@ from .ask import (
     DEFAULT_GEMINI_BASE_URL,
     _load_dotenv,
 )
-from .config import DEFAULT_MODEL, DEFAULT_PROVIDER, config_path, load_config
+from .config import (
+    DEFAULT_MODEL,
+    DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_PROVIDER,
+    OLLAMA_API_KEY,
+    PROVIDERS,
+    config_path,
+    load_config,
+)
 from .tracker import TrackerError, find_repo_root
 
 
@@ -36,9 +44,15 @@ def run_diagnostics(path: Path) -> list[tuple[bool, str]]:
     base_url = (
         os.environ.get("CODEMATE_BASE_URL") or saved.get("base_url")
         or dotenv.get("CODEMATE_BASE_URL")
-        or (DEFAULT_GEMINI_BASE_URL if provider == "gemini" else DEFAULT_CHAT_BASE_URL)
+        or (
+            DEFAULT_GEMINI_BASE_URL if provider == "gemini"
+            else DEFAULT_OLLAMA_BASE_URL if provider == "ollama"
+            else DEFAULT_CHAT_BASE_URL
+        )
     )
     api_key = os.environ.get("GEMINI_API_KEY") or saved.get("api_key") or dotenv.get("GEMINI_API_KEY")
+    if provider == "ollama" and not api_key:
+        api_key = OLLAMA_API_KEY
 
     results: list[tuple[bool, str]] = [(True, f"Repository: {root}")]
     results.append((config_path().is_file(), f"User configuration: {config_path()}"))
@@ -60,7 +74,7 @@ def run_diagnostics(path: Path) -> list[tuple[bool, str]]:
     else:
         results.append((False, "Vector index: missing; run `codemate index`"))
 
-    if provider not in {"gemini", "openai-compatible"}:
+    if provider not in PROVIDERS:
         results.append((False, f"API connection: unsupported provider {provider!r}"))
     elif not api_key or not model:
         results.append((False, "API connection: skipped until provider, model, and API key are configured"))
