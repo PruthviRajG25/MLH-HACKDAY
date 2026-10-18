@@ -39,8 +39,8 @@ complete proposed diff, and requires approval before writing files.
 
 ## Quick start
 
-**Requirements:** Python 3.10–3.14, Git, and a Gemini API key for the
-default Gemma 4 setup. Python 3.15 is not supported yet because the local
+**Requirements:** Python 3.10–3.14, Git, and credentials for your chosen AI
+provider. Python 3.15 is not supported yet because the local
 embedding stack depends on ONNX Runtime, which does not currently publish
 Python 3.15 packages.
 
@@ -50,9 +50,39 @@ apps; it creates an isolated environment):
 ```sh
 pipx install --python 3.14 'codemate[embeddings] @ git+https://github.com/PruthviRajG25/MLH-HACKDAY.git'
 codemate init
+```
+
+`codemate init` saves the AI provider settings for your user account. It is
+separate from the project and does not read the project's `.env` file. Choose
+Gemini for the default Gemma 4 model, or `openai-compatible` for a compatible
+endpoint hosted locally or remotely. For example, a local OpenAI-compatible
+server might use:
+
+```text
+Provider: openai-compatible
+Model: <model name served by your endpoint>
+API base URL: http://localhost:PORT/v1
+API key: <the key required by that endpoint>
+```
+
+Use the actual model name, endpoint URL, and key for your AI service. Codemate
+supports Gemini and OpenAI-compatible chat APIs; a model/service must expose
+one of those APIs to connect. You can change the saved settings later with
+`codemate init` or `codemate config set`.
+
+Codemate indexes Git repositories. If your project was cloned with Git, it is
+already initialized. For a new project folder that is not yet a repository, run
+`git init` from that folder first. Then move into the project and index it:
+
+```sh
+cd /path/to/your/project
+git init                 # only for a folder that is not already a Git repository
 codemate index
 codemate ask "How is this project structured?"
 ```
+
+For an existing Git repository, skip `git init` and run the Codemate commands
+from anywhere inside that repository.
 
 For development from a local clone instead:
 
@@ -66,7 +96,8 @@ codemate ask "How is this project structured?"
 `codemate init` configures the chat provider, model, endpoint, and API key. The
 API key prompt is hidden, and credentials are saved in your user configuration
 directory—not in the repository. The default model is `gemma-4-26b-a4b-it` on
-Google's Gemini API. The first `codemate index` run downloads the local
+Google's Gemini API. Configure the provider before running `codemate ask` or
+commands that need AI. The first `codemate index` run downloads the local
 embedding model if it is not cached; expect that first run to take longer.
 
 To inventory the current Git working tree without creating embeddings, run:
@@ -311,23 +342,29 @@ Run:
 codemate init
 ```
 
-Follow the prompts for provider, model, endpoint, and API key. With the default
-Gemini provider, Codemate uses Gemma 4. The API key prompt is hidden, and the
-settings are saved in your Windows user configuration—not in the project
-folder. You only need to do this once per Windows user account.
+Follow the prompts for provider, model, endpoint, and API key. Choose Gemini
+for the default Gemma 4 setup, or `openai-compatible` for a local or hosted
+endpoint that implements the OpenAI chat completions API. For example, a local
+server may use `http://localhost:PORT/v1`; enter the model name and key expected
+by that server. The API key prompt is hidden, and settings are saved in your
+Windows user configuration—not in the project folder. You only need to do this
+once per Windows user account, and can change it later with `codemate init`.
 
 #### 5. Open the project you want Codemate to understand
 
-Use `Set-Location` to move into the developer's own project folder. The folder
-must be a Git repository:
+Use `Set-Location` to move into your project folder. It must be a Git
+repository. If it was not cloned with Git and does not already contain a
+`.git` folder, initialize it once:
 
 ```powershell
 Set-Location "C:\path\to\your\project"
+git init
 git status
 ```
 
-Replace the example path with the actual folder. `git status` should show the
-repository's branch and working-tree state.
+Replace the example path with the actual folder. If it is already a Git
+repository, skip `git init`. `git status` should show the repository's branch
+and working-tree state.
 
 #### 6. Build the project's local index
 
