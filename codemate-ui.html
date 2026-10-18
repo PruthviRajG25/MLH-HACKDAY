@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Codemate — Live Command-Line Visualizer & RAG Pipeline</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #05070b; color: #e2e8f0; overflow-x: hidden; }
+    .glass { background: rgba(11, 15, 23, 0.85); backdrop-filter: blur(16px); }
+    .code-highlight { background: rgba(6, 182, 212, 0.16); border-left: 3px solid #06b6d4; }
+    @keyframes pulseBorder {
+      0%, 100% { border-color: rgba(6, 182, 212, 0.35); box-shadow: 0 0 20px rgba(6, 182, 212, 0.15); }
+      50% { border-color: rgba(16, 185, 129, 0.75); box-shadow: 0 0 35px rgba(16, 185, 129, 0.35); }
+    }
+    .live-glow { animation: pulseBorder 3s infinite ease-in-out; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0b0f17; }
+    ::-webkit-scrollbar-thumb { background: #263244; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
+
+  <!-- TOP NAVBAR -->
+  <header class="border-b border-slate-800/90 glass sticky top-0 z-30">
+    <div class="max-w-[1600px] mx-auto px-5 h-16 flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-emerald-500 p-[1.5px] shadow-lg shadow-cyan-500/30">
+          <div class="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
+            <i data-lucide="terminal" class="w-5 h-5 text-cyan-400"></i>
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center gap-2.5">
+            <span class="font-extrabold tracking-tight text-white text-lg">CODEMATE</span>
+            <span class="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">LIVE CLI BRIDGE</span>
+            <span id="backendBadge" class="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+              <span id="backendStatusText">Connected to Real CLI (codemate/cli.py)</span>
+            </span>
+          </div>
+          <p class="text-xs text-slate-400">Web Controller Executing Real <code class="text-cyan-300">python -m codemate.cli</code> Commands Live</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <button onclick="triggerParticleBurst(); runFullLiveDemo()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 text-slate-950 font-extrabold text-xs font-mono hover:scale-105 transition flex items-center gap-2 shadow-lg shadow-cyan-500/25">
+          <i data-lucide="zap" class="w-4 h-4 fill-current"></i> AUTO-RUN LIVE CLI PIPELINE
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 60FPS ANIMATED NEURAL & PIPELINE CANVAS HERO (UNMISSABLE VISUAL ANIMATION) -->
+  <section class="relative border-b border-slate-800 bg-slate-950 overflow-hidden">
+    <div class="max-w-[1600px] mx-auto px-5 pt-4 pb-3 flex items-center justify-between">
+      <div class="flex items-center gap-2 text-xs font-mono">
+        <span class="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold">LIVE 60FPS PIPELINE VISUALIZER</span>
+        <span id="canvasStageText" class="text-emerald-400 font-semibold">Streaming vectors across Git Working Tree → Chunker → FastEmbed (384-D) → SQLite .index/ → CLI Output</span>
+      </div>
+      <div class="flex items-center gap-4 text-xs font-mono">
+        <span>Tracked Files: <strong id="metricFilesCount" class="text-cyan-400">12</strong></span>
+        <span>SQLite Chunks: <strong id="metricChunksCount" class="text-emerald-400">78</strong></span>
+        <span>Embedder: <strong id="metricEmbedder" class="text-purple-400">BAAI/bge-small-en-v1.5</strong></span>
+      </div>
+    </div>
+
+    <!-- Interactive 60FPS Canvas -->
+    <div class="w-full h-[210px] relative">
+      <canvas id="pipelineCanvas" class="w-full h-full block"></canvas>
+    </div>
+  </section>
+
+  <!-- MAIN WORKSPACE: LIVE REAL COMMAND LINE + CITATION & VECTOR INSPECTOR -->
+  <main class="flex-1 max-w-[1600px] w-full mx-auto p-5 grid grid-cols-1 lg:grid-cols-12 gap-5">
+
+    <!-- LEFT (7 cols): REAL COMMAND-LINE RUNNER -->
+    <div class="lg:col-span-7 flex flex-col gap-4">
+
+      <!-- One-Click Real CLI Commands -->
+      <div class="bg-slate-900/95 border border-slate-800 rounded-xl p-3.5 live-glow">
+        <div class="flex items-center justify-between mb-2.5">
+          <span class="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+            <i data-lucide="play-circle" class="w-4 h-4 text-cyan-400"></i>
+            Click to Execute Real `codemate` Command Line on Backend:
+          </span>
+          <span id="cliRunStatus" class="text-xs font-mono text-emerald-400">● Idle</span>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button onclick="executeRealCLI('codemate track')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-mono font-semibold transition">
+            $ codemate track
+          </button>
+          <button onclick="executeRealCLI('codemate index')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-semibold transition">
+            $ codemate index
+          </button>
+          <button onclick="executeRealCLI('codemate ask &quot;How does index_repository store chunks and embeddings in SQLite?&quot;')" class="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-white border border-cyan-400 text-xs font-mono font-semibold transition">
+            $ codemate ask "How does index_repository store chunks?"
+          </button>
+          <button onclick="executeRealCLI('codemate ask &quot;How does chunk_text split lines and compute overlap?&quot;')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-purple-500/20 text-purple-300 border border-purple-500/40 text-xs font-mono transition">
+            $ codemate ask "How does chunk_text split lines?"
+          </button>
+          <button onclick="executeRealCLI('codemate ask &quot;How does track_repository fingerprint git files?&quot;')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-mono transition">
+            $ codemate ask "How does track_repository work?"
+          </button>
+          <button onclick="executeRealCLI('codemate trck')" class="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 text-xs font-mono font-semibold transition">
+            ⚠ $ codemate trck (Test Syntax Error)
+          </button>
+        </div>
+      </div>
+
+      <!-- Animated Live Progress Bar during CLI Execution -->
+      <div id="liveProgressWrapper" class="hidden bg-slate-900 border border-cyan-500/40 rounded-xl p-3 space-y-1.5">
+        <div class="flex justify-between text-xs font-mono">
+          <span id="liveProgressLabel" class="text-cyan-300">Executing python -m codemate.cli...</span>
+          <span id="liveProgressPct" class="text-emerald-400 font-bold">0%</span>
+        </div>
+        <div class="w-full h-2 bg-slate-950 rounded-full overflow-hidden">
+          <div id="liveProgressBar" class="h-full bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 transition-all duration-150" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Real Command-Line Output Terminal -->
+      <div class="bg-[#070a0f] border border-slate-800 rounded-xl overflow-hidden flex flex-col shadow-2xl h-[540px]">
+        <div class="bg-slate-900 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-rose-500"></span>
+            <span class="w-3 h-3 rounded-full bg-amber-500"></span>
+            <span class="w-3 h-3 rounded-full bg-emerald-500"></span>
+            <span class="ml-2 text-xs font-mono text-slate-300 font-semibold">LIVE SUBPROCESS TERMINAL — python -m codemate.cli</span>
+          </div>
+          <button onclick="clearTerminal()" class="text-xs font-mono text-slate-400 hover:text-white px-2.5 py-0.5 rounded bg-slate-800">Clear</button>
+        </div>
+
+        <div id="terminalOutput" class="flex-1 p-5 overflow-y-auto font-mono text-xs leading-relaxed space-y-4"></div>
+
+        <!-- Custom CLI Input -->
+        <form onsubmit="handleCustomCommand(event)" class="bg-slate-900 border-t border-slate-800 p-3 flex items-center gap-2">
+          <span class="text-emerald-400 font-mono text-sm font-bold pl-2">$</span>
+          <input
+            id="customCmdInput"
+            type="text"
+            placeholder='Type any CLI command (or a typo like: codemate indx --bad-flag) and press Enter...'
+            class="flex-1 bg-transparent text-xs font-mono text-white placeholder-slate-500 focus:outline-none"
+          />
+          <button type="submit" class="px-4 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-950 font-bold text-xs font-mono">
+            Run Live CLI
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- RIGHT (5 cols): COSINE SIMILARITY METERS & REAL SOURCE CODE CITATIONS -->
+    <div class="lg:col-span-5 flex flex-col gap-4">
+
+      <!-- Animated Cosine Similarity Meter Bars -->
+      <div class="bg-slate-900/95 border border-slate-800 rounded-xl p-4">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <i data-lucide="bar-chart-3" class="w-4 h-4 text-cyan-400"></i>
+              Live Vector Cosine Similarity Ranking (`.index/vectors.sqlite3`)
+            </h3>
+            <p class="text-xs text-slate-400">Click any ranked chunk `[S1]..[S5]` to inspect exact lines below</p>
+          </div>
+        </div>
+        <div id="similarityBarsContainer" class="space-y-2.5 min-h-[160px]"></div>
+      </div>
+
+      <!-- Exact File & Line Source Inspector -->
+      <div class="bg-slate-900/95 border border-slate-800 rounded-xl overflow-hidden flex-1 flex flex-col">
+        <div class="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i data-lucide="file-code-2" class="w-4 h-4 text-emerald-400"></i>
+            <span id="inspectorFileTitle" class="text-xs font-mono font-bold text-white">codemate/indexer.py:1-49</span>
+          </div>
+          <span id="inspectorScoreBadge" class="text-xs font-mono px-2.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold">
+            [S1] Score: 0.813
+          </span>
+        </div>
+
+        <div id="codeInspectorBody" class="p-4 font-mono text-xs overflow-y-auto flex-1 bg-slate-950/90 space-y-0.5 max-h-[340px]"></div>
+
+        <div id="inspectorBlameFooter" class="px-4 py-2.5 bg-slate-900 border-t border-slate-800 text-[11px] font-mono text-slate-400"></div>
+      </div>
+
+    </div>
+  </main>
+
+  <script>
+    const API_BASE = window.location.protocol.startsWith('http')
+      ? window.location.origin
+      : 'http://127.0.0.1:8765';
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    let CURRENT_HITS = [];
+
+    // =========================================================================
+    // 1. 60FPS HTML5 CANVAS PIPELINE & VECTOR ANIMATION
+    // =========================================================================
+    const canvas = document.getElementById('pipelineCanvas');
+    const ctx = canvas.getContext('2d');
+    let activeStage = 0; // 0..4
+    let particles = [];
+    let radarAngle = 0;
+
+    const STAGES = [
+      { title: '1. GIT TREE', sub: 'tracker.py (SHA-256)', color: '#38bdf8' },
+      { title: '2. CHUNKER', sub: 'chunker.py (lines)', color: '#a855f7' },
+      { title: '3. FASTEMBED', sub: 'bge-small (384-D)', color: '#22d3ee' },
+      { title: '4. SQLITE .INDEX/', sub: 'vectors.sqlite3', color: '#10b981' },
+      { title: '5. CLI OUTPUT', sub: 'codemate.cli [S1..Sk]', color: '#f59e0b' }
+    ];
+
+    function resizeCanvas() {
+      canvas.width = canvas.parentElement.clientWidth * window.devicePixelRatio;
+      canvas.height = canvas.parentElement.clientHeight * window.devicePixelRatio;
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function spawnParticle(fast = false) {
+      const w = canvas.parentElement.clientWidth;
+      const h = canvas.parentElement.clientHeight;
+      particles.push({
+        x: 90,
+        y: h / 2 + (Math.random() - 0.5) * 26,
+        vx: (fast ? 6.5 : 2.6) + Math.random() * 2.2,
+        radius: fast ? 4 : 2.5,
+        color: ['#22d3ee', '#10b981', '#a855f7', '#f59e0b'][Math.floor(Math.random() * 4)],
+        alpha: 1
+      });
+    }
+
+    function triggerParticleBurst() {
+      for (let i = 0; i < 28; i++) {
+        setTimeout(() => spawnParticle(true), i * 35);
+      }
+    }
+
+    function animateCanvas() {
+      const w = canvas.parentElement.clientWidth;
+      const h = canvas.parentElement.clientHeight;
+      ctx.clearRect(0, 0, w, h);
+
+      // Subtle background grid lines
+      ctx.strokeStyle = 'rgba(30, 41, 59, 0.45)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < w; x += 40) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+      }
+      for (let y = 0; y < h; y += 40) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      }
+
+      const marginX = Math.max(110, w * 0.1);
+      const usableW = w - marginX * 2;
+      const cy = h / 2;
+
+      // Connecting glowing conduit line
+      const grad = ctx.createLinearGradient(marginX, cy, w - marginX, cy);
+      grad.addColorStop(0, '#38bdf8');
+      grad.addColorStop(0.5, '#22d3ee');
+      grad.addColorStop(1, '#10b981');
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(marginX, cy);
+      ctx.lineTo(w - marginX, cy);
+      ctx.stroke();
+
+      // Spawn continuous stream of particles
+      if (Math.random() < 0.35) spawnParticle(false);
+
+      // Update & draw flowing data packets
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        if (p.x > w - marginX) {
+          particles.splice(i, 1);
+          continue;
+        }
+        ctx.save();
+        ctx.beginPath();
+        ctx.fillStyle = p.color;
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 12;
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Draw the 5 Pipeline Nodes
+      radarAngle += 0.045;
+      STAGES.forEach((st, idx) => {
+        const nx = marginX + (usableW / (STAGES.length - 1)) * idx;
+        const isCurrent = idx === activeStage;
+
+        // Outer spinning radar ring on active stage
+        if (isCurrent) {
+          ctx.save();
+          ctx.translate(nx, cy);
+          ctx.rotate(radarAngle);
+          ctx.strokeStyle = st.color;
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([10, 8]);
+          ctx.beginPath();
+          ctx.arc(0, 0, 44, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Node circle
+        ctx.save();
+        ctx.beginPath();
+        ctx.fillStyle = '#0b111a';
+        ctx.strokeStyle = st.color;
+        ctx.lineWidth = isCurrent ? 3.5 : 2;
+        ctx.shadowColor = st.color;
+        ctx.shadowBlur = isCurrent ? 22 : 8;
+        ctx.arc(nx, cy, 32, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+
+        // Inner pulsing core
+        ctx.beginPath();
+        ctx.fillStyle = st.color;
+        ctx.arc(nx, cy, isCurrent ? 8 + Math.sin(radarAngle * 2) * 2.5 : 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Labels
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 11px "JetBrains Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(st.title, nx, cy + 54);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '10px "JetBrains Mono", monospace';
+        ctx.fillText(st.sub, nx, cy + 70);
+      });
+
+      requestAnimationFrame(animateCanvas);
+    }
+    requestAnimationFrame(animateCanvas);
+
+    // =========================================================================
+    // 2. LIVE WEB-TO-CLI EXECUTION & STREAMING TERMINAL
+    // =========================================================================
+    function escapeHtml(str) {
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function stripAnsi(str) {
+      return String(str).replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+    }
+
+    async function animateProgressBar(label, durationMs = 600) {
+      const wrap = document.getElementById('liveProgressWrapper');
+      const bar = document.getElementById('liveProgressBar');
+      const pct = document.getElementById('liveProgressPct');
+      document.getElementById('liveProgressLabel').textContent = label;
+      wrap.classList.remove('hidden');
+      const steps = 12;
+      for (let i = 1; i <= steps; i++) {
+        const p = Math.round((i / steps) * 100);
+        bar.style.width = p + '%';
+        pct.textContent = p + '%';
+        activeStage = Math.min(4, Math.floor((i / steps) * 5));
+        await sleep(durationMs / steps);
+      }
+      setTimeout(() => wrap.classList.add('hidden'), 350);
+    }
+
+    async function streamTextToTerminal(cmdText, rawOutput, isError = false) {
+      const term = document.getElementById('terminalOutput');
+      const block = document.createElement('div');
+      block.className = isError
+        ? 'p-3.5 rounded-xl bg-rose-950/30 border border-rose-500/50 space-y-2'
+        : 'p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2';
+      const header = document.createElement('div');
+      header.className = (isError ? 'text-rose-400' : 'text-emerald-400') + ' font-bold text-xs flex items-center justify-between';
+      header.innerHTML = `<span>$ ${escapeHtml(cmdText)}</span><span class="text-[10px] px-2 py-0.5 rounded ${isError ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'bg-cyan-500/15 text-cyan-300'}">${isError ? '✗ CLI SYNTAX ERROR (EXIT 2)' : '✓ REAL CLI OUTPUT'}</span>`;
+      const pre = document.createElement('pre');
+      pre.className = (isError ? 'text-rose-200' : 'text-slate-200') + ' whitespace-pre-wrap text-[11.5px] leading-relaxed overflow-x-auto';
+      block.appendChild(header);
+      block.appendChild(pre);
+      term.appendChild(block);
+
+      const cleaned = stripAnsi(rawOutput);
+      const cleanLines = cleaned.split('\n');
+      for (let i = 0; i < cleanLines.length; i++) {
+        pre.textContent += (i > 0 ? '\n' : '') + cleanLines[i];
+        term.scrollTop = term.scrollHeight;
+        await sleep(22);
+      }
+
+      // Extract "Did you mean: $ codemate ..." and render 1-click Auto-Fix button!
+      if (isError) {
+        const match = cleaned.match(/\$\s+(codemate\s+[^\n│╯]+)/);
+        if (match && match[1]) {
+          const suggestedCmd = match[1].trim();
+          const fixBar = document.createElement('div');
+          fixBar.className = 'pt-2 border-t border-rose-500/30 flex items-center justify-between';
+          fixBar.innerHTML = `
+            <span class="text-amber-300 text-xs">💡 Auto-fix suggestion detected: <code class="text-white font-bold">${escapeHtml(suggestedCmd)}</code></span>
+            <button onclick="executeRealCLI('${suggestedCmd.replace(/'/g, "\\'")}')" class="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition">
+              Fix & Run Suggested Command
+            </button>
+          `;
+          block.appendChild(fixBar);
+          term.scrollTop = term.scrollHeight;
+        }
+      }
+    }
+
+    function renderSimilarityBars(hits) {
+      const container = document.getElementById('similarityBarsContainer');
+      if (!hits || !hits.length) return;
+      container.innerHTML = hits.map((h, idx) => {
+        const pct = Math.max(8, Math.min(100, Math.round(h.score * 100)));
+        return `
+          <div onclick="renderHitInInspector(${idx})" class="p-2.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-cyan-500/50 cursor-pointer transition">
+            <div class="flex items-center justify-between text-xs font-mono mb-1">
+              <span class="text-cyan-300 font-semibold">[${h.label}] ${escapeHtml(h.path)}:${h.start_line}-${h.end_line}</span>
+              <span class="text-emerald-400 font-bold">${h.score.toFixed(3)}</span>
+            </div>
+            <div class="w-full h-2 bg-slate-900 rounded-full overflow-hidden">
+              <div class="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-500" style="width: ${pct}%"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderHitInInspector(idx) {
+      const hit = CURRENT_HITS[idx];
+      if (!hit) return;
+      document.getElementById('inspectorFileTitle').textContent = `${hit.path}:${hit.start_line}-${hit.end_line}`;
+      document.getElementById('inspectorScoreBadge').textContent = `[${hit.label}] Score: ${hit.score.toFixed(3)}`;
+      document.getElementById('inspectorBlameFooter').textContent = `git blame: ${hit.blame || 'Tracked working-tree file'}`;
+
+      const lines = hit.text.split('\n');
+      const body = document.getElementById('codeInspectorBody');
+      body.innerHTML = lines.map((codeLine, offset) => `
+        <div class="flex items-start px-2 py-0.5 rounded code-highlight text-cyan-100">
+          <span class="w-9 select-none text-slate-500 text-right pr-3">${hit.start_line + offset}</span>
+          <pre class="whitespace-pre overflow-x-auto">${escapeHtml(codeLine)}</pre>
+        </div>
+      `).join('');
+    }
+
+    async function executeRealCLI(cmdStr) {
+      triggerParticleBurst();
+      document.getElementById('cliRunStatus').innerHTML = `<span class="text-cyan-400 animate-pulse">● Executing ${escapeHtml(cmdStr)}...</span>`;
+      await animateProgressBar(`Running real subprocess: python -m codemate.cli (${cmdStr})`, 550);
+
+      try {
+        // 1. Run the actual CLI subprocess on the backend
+        const cliRes = await fetch(`${API_BASE}/api/run-cli`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cmd: cmdStr })
+        });
+        const cliData = await cliRes.json();
+        if (cliData.stats) {
+          document.getElementById('metricFilesCount').textContent = cliData.stats.manifest_files_count || 0;
+          document.getElementById('metricChunksCount').textContent = cliData.stats.chunks_count || 0;
+        }
+        const outputText = (cliData.stdout || '') + (cliData.stderr ? '\n' + cliData.stderr : '');
+        await streamTextToTerminal(cmdStr, outputText || 'Command completed (exit 0).', !cliData.ok);
+
+        // 2. If it's an `ask` command and succeeded, also fetch structured hits to animate the right-hand similarity bars
+        if (cliData.ok && cmdStr.includes(' ask ')) {
+          const match = cmdStr.match(/ask\s+["']?([^"']+)["']?/i);
+          const q = match ? match[1] : 'How does index_repository work?';
+          const askRes = await fetch(`${API_BASE}/api/ask`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: q, top_k: 5 })
+          });
+          const askData = await askRes.json();
+          if (askData.ok && askData.hits) {
+            CURRENT_HITS = askData.hits;
+            renderSimilarityBars(CURRENT_HITS);
+            renderHitInInspector(0);
+          }
+        }
+      } catch (err) {
+        await streamTextToTerminal(cmdStr, `Backend server unreachable at ${API_BASE}. Make sure codemate_ui.py serve is running.`);
+      }
+      document.getElementById('cliRunStatus').innerHTML = `<span class="text-emerald-400">● Ready</span>`;
+    }
+
+    async function runFullLiveDemo() {
+      clearTerminal();
+      await executeRealCLI('codemate track');
+      await sleep(300);
+      await executeRealCLI('codemate index');
+      await sleep(300);
+      await executeRealCLI('codemate ask "How does index_repository store chunks and embeddings in SQLite?"');
+    }
+
+    function clearTerminal() {
+      document.getElementById('terminalOutput').innerHTML = '';
+    }
+
+    function handleCustomCommand(e) {
+      e.preventDefault();
+      const input = document.getElementById('customCmdInput');
+      const val = input.value.trim();
+      if (!val) return;
+      input.value = '';
+      const cmd = val.startsWith('codemate') ? val : `codemate ask "${val}"`;
+      executeRealCLI(cmd);
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      executeRealCLI('codemate ask "How does index_repository store chunks and embeddings in SQLite?"');
+    });
+  </script>
+</body>
+</html>
