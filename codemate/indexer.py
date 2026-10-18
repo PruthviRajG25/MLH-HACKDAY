@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import struct
 from dataclasses import dataclass
@@ -71,12 +72,54 @@ def _connect(database_path: Path) -> sqlite3.Connection:
             end_line INTEGER NOT NULL,
             text TEXT NOT NULL,
             embedding BLOB NOT NULL,
-            dimensions INTEGER NOT NULL
+            dimensions INTEGER NOT NULL,
+            language TEXT NOT NULL DEFAULT '',
+            symbol TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS chunks_path_idx ON chunks(path);
         """
     )
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(chunks)")}
+    if "language" not in columns:
+        connection.execute("ALTER TABLE chunks ADD COLUMN language TEXT NOT NULL DEFAULT ''")
+    if "symbol" not in columns:
+        connection.execute("ALTER TABLE chunks ADD COLUMN symbol TEXT NOT NULL DEFAULT ''")
     return connection
+
+
+_LANGUAGES = {
+    ".py": "Python", ".pyi": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
+    ".mjs": "JavaScript", ".cjs": "JavaScript", ".ts": "TypeScript", ".tsx": "TypeScript",
+    ".go": "Go", ".rs": "Rust", ".java": "Java", ".kt": "Kotlin", ".swift": "Swift",
+    ".c": "C", ".h": "C", ".cc": "C++", ".cpp": "C++", ".hpp": "C++",
+    ".cs": "C#", ".rb": "Ruby", ".php": "PHP", ".sh": "Shell", ".sql": "SQL",
+}
+_SYMBOL_PATTERNS = (
+    re.compile(r"^\s*(?:async\s+)?(?:def|class)\s+([A-Za-z_$][\w$]*)"),
+    re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)"),
+    re.compile(r"^\s*(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)"),
+    re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)"),
+    re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)"),
+)
+
+
+def _chunk_metadata(relative: str, text: str, chunks: list[Any]) -> list[tuple[str, str]]:
+    language = _LANGUAGES.get(Path(relative).suffix.lower(), "")
+    symbol = ""
+    lines = text.splitlines()
+    metadata: list[tuple[str, str]] = []
+    line_cursor = 0
+    for chunk in chunks:
+        while line_cursor < min(chunk.start_line, len(lines)):
+            line = lines[line_cursor]
+            line_cursor += 1
+            for pattern in _SYMBOL_PATTERNS:
+                match = pattern.match(line)
+                if match:
+                    symbol = match.group(1)
+                    break
+        metadata.append((language, symbol))
+    return metadata
 
 
 def _pack_vector(vector: Any) -> tuple[bytes, int]:
@@ -114,6 +157,7 @@ def index_repository(
             "overlap_chars": overlap_chars,
             "max_file_bytes": max_file_bytes,
             "privacy_filter_version": 1,
+            "chunker_version": 2,
         }
         # Validate chunk settings before changing the tracker or index.
         chunk_text("validation", max_chars, overlap_chars)
@@ -214,7 +258,12 @@ def index_repository(
         if file_chunks:
             if embedder is None:
                 embedder = _load_fastembed(model_name)
-            documents = [f"File: {relative}\nLines: {c.start_line}-{c.end_line}\n\n{c.text}" for c in file_chunks]
+            metadata = _chunk_metadata(relative, text, file_chunks)
+            documents = [
+                f"File: {relative}\nLanguage: {language or 'unknown'}\n"
+                f"Symbol: {symbol or 'unknown'}\nLines: {chunk.start_line}-{chunk.end_line}\n\n{chunk.text}"
+                for chunk, (language, symbol) in zip(file_chunks, metadata)
+            ]
             try:
                 for offset in range(0, len(documents), EMBED_BATCH_SIZE):
                     vectors.extend(
@@ -237,8 +286,9 @@ def index_repository(
                     ).hexdigest()
                     connection.execute(
                         """INSERT INTO chunks
-                           (id, path, content_hash, ordinal, start_line, end_line, text, embedding, dimensions)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           (id, path, content_hash, ordinal, start_line, end_line, text, embedding,
+                            dimensions, language, symbol)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             chunk_id,
                             relative,
@@ -249,6 +299,8 @@ def index_repository(
                             chunk.text,
                             vector_blob,
                             dimensions,
+                            metadata[chunk.ordinal][0] if metadata else "",
+                            metadata[chunk.ordinal][1] if metadata else "",
                         ),
                     )
                 connection.execute(

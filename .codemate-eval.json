@@ -1,0 +1,24 @@
+{
+  "cases": [
+    {
+      "question": "How does Codemate discover tracked and untracked files in a Git working tree?",
+      "expected_paths": ["codemate/tracker.py"]
+    },
+    {
+      "question": "Where are text chunks and embedding vectors saved in SQLite?",
+      "expected_paths": ["codemate/indexer.py"]
+    },
+    {
+      "question": "How does the chunker choose line boundaries and character overlap?",
+      "expected_paths": ["codemate/chunker.py"]
+    },
+    {
+      "question": "How does the ask command combine local retrieval with a chat API response?",
+      "expected_paths": ["codemate/ask.py"]
+    },
+    {
+      "question": "Where are the user's AI provider and API key settings stored?",
+      "expected_paths": ["codemate/config.py"]
+    }
+  ]
+}

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Codemate — Live Command-Line Visualizer & RAG Pipeline</title>
+  <title>Codemate — Live Command-Line Visualizer & Synced Main Pipeline</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -49,34 +49,35 @@
         <div>
           <div class="flex items-center gap-2.5">
             <span class="font-extrabold tracking-tight text-white text-lg">CODEMATE</span>
-            <span class="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">LIVE CLI BRIDGE</span>
+            <span class="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">SYNCED WITH ORIGIN/MAIN</span>
             <span id="backendBadge" class="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
               <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-              <span id="backendStatusText">Connected to Real CLI (codemate/cli.py)</span>
+              <span id="backendStatusText">Connected to Real CLI (10 Commands Active)</span>
             </span>
           </div>
-          <p class="text-xs text-slate-400">Web Controller Executing Real <code class="text-cyan-300">python -m codemate.cli</code> Commands Live</p>
+          <p class="text-xs text-slate-400">Live Web Controller for <code class="text-cyan-300">track • index • ask • evaluate • doctor • failures • run • git • config • init</code></p>
         </div>
       </div>
 
       <div class="flex items-center gap-3">
         <button onclick="triggerParticleBurst(); runFullLiveDemo()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-400 via-teal-400 to-emerald-400 text-slate-950 font-extrabold text-xs font-mono hover:scale-105 transition flex items-center gap-2 shadow-lg shadow-cyan-500/25">
-          <i data-lucide="zap" class="w-4 h-4 fill-current"></i> AUTO-RUN LIVE CLI PIPELINE
+          <i data-lucide="zap" class="w-4 h-4 fill-current"></i> AUTO-RUN FULL MAIN PIPELINE
         </button>
       </div>
     </div>
   </header>
 
-  <!-- 60FPS ANIMATED NEURAL & PIPELINE CANVAS HERO (UNMISSABLE VISUAL ANIMATION) -->
+  <!-- 60FPS ANIMATED NEURAL & PIPELINE CANVAS HERO -->
   <section class="relative border-b border-slate-800 bg-slate-950 overflow-hidden">
-    <div class="max-w-[1600px] mx-auto px-5 pt-4 pb-3 flex items-center justify-between">
+    <div class="max-w-[1600px] mx-auto px-5 pt-4 pb-3 flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-2 text-xs font-mono">
         <span class="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold">LIVE 60FPS PIPELINE VISUALIZER</span>
-        <span id="canvasStageText" class="text-emerald-400 font-semibold">Streaming vectors across Git Working Tree → Chunker → FastEmbed (384-D) → SQLite .index/ → CLI Output</span>
+        <span id="canvasStageText" class="text-emerald-400 font-semibold">Git Tree &amp; Guard → AST Symbol Chunker v2 → Hybrid RAG (0.78 Vec + 0.22 Lex) → SQLite + Failure Atlas → CLI &amp; Repair Agent</span>
       </div>
       <div class="flex items-center gap-4 text-xs font-mono">
-        <span>Tracked Files: <strong id="metricFilesCount" class="text-cyan-400">12</strong></span>
-        <span>SQLite Chunks: <strong id="metricChunksCount" class="text-emerald-400">78</strong></span>
+        <span>Tracked Files: <strong id="metricFilesCount" class="text-cyan-400">24</strong></span>
+        <span>SQLite Chunks: <strong id="metricChunksCount" class="text-emerald-400">238</strong></span>
+        <span>Recall@6: <strong id="metricRecall" class="text-amber-400">100% (5/5)</strong></span>
         <span>Embedder: <strong id="metricEmbedder" class="text-purple-400">BAAI/bge-small-en-v1.5</strong></span>
       </div>
     </div>
@@ -93,7 +94,7 @@
     <!-- LEFT (7 cols): REAL COMMAND-LINE RUNNER -->
     <div class="lg:col-span-7 flex flex-col gap-4">
 
-      <!-- One-Click Real CLI Commands -->
+      <!-- One-Click Real CLI Commands (All Synced Main Branch Commands) -->
       <div class="bg-slate-900/95 border border-slate-800 rounded-xl p-3.5 live-glow">
         <div class="flex items-center justify-between mb-2.5">
           <span class="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
@@ -109,17 +110,26 @@
           <button onclick="executeRealCLI('codemate index')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-semibold transition">
             $ codemate index
           </button>
-          <button onclick="executeRealCLI('codemate ask &quot;How does index_repository store chunks and embeddings in SQLite?&quot;')" class="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-white border border-cyan-400 text-xs font-mono font-semibold transition">
+          <button onclick="executeRealCLI('codemate evaluate')" class="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-400/60 text-xs font-mono font-semibold transition">
+            ★ $ codemate evaluate (Benchmark)
+          </button>
+          <button onclick="executeRealCLI('codemate doctor')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-teal-500/20 text-teal-300 border border-teal-500/40 text-xs font-mono font-semibold transition">
+            $ codemate doctor
+          </button>
+          <button onclick="executeRealCLI('codemate failures --all')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-orange-500/20 text-orange-300 border border-orange-500/40 text-xs font-mono font-semibold transition">
+            $ codemate failures --all
+          </button>
+          <button onclick="executeRealCLI('codemate config list')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-xs font-mono font-semibold transition">
+            $ codemate config list
+          </button>
+          <button onclick="executeRealCLI('codemate ask &quot;How does index_repository store chunks, language, and symbol metadata in SQLite?&quot;')" class="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-white border border-cyan-400 text-xs font-mono font-semibold transition">
             $ codemate ask "How does index_repository store chunks?"
           </button>
-          <button onclick="executeRealCLI('codemate ask &quot;How does chunk_text split lines and compute overlap?&quot;')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-purple-500/20 text-purple-300 border border-purple-500/40 text-xs font-mono transition">
-            $ codemate ask "How does chunk_text split lines?"
+          <button onclick="executeRealCLI('codemate ask &quot;How does repair_repository in agent.py stage and apply code fixes?&quot;')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-purple-500/20 text-purple-300 border border-purple-500/40 text-xs font-mono transition">
+            $ codemate ask "How does agent.py repair_repository work?"
           </button>
-          <button onclick="executeRealCLI('codemate ask &quot;How does track_repository fingerprint git files?&quot;')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-mono transition">
-            $ codemate ask "How does track_repository work?"
-          </button>
-          <button onclick="executeRealCLI('codemate trck')" class="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 text-xs font-mono font-semibold transition">
-            ⚠ $ codemate trck (Test Syntax Error)
+          <button onclick="executeRealCLI('codemate evalute')" class="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 text-xs font-mono font-semibold transition">
+            ⚠ $ codemate evalute (Test Syntax Error)
           </button>
         </div>
       </div>
@@ -155,7 +165,7 @@
           <input
             id="customCmdInput"
             type="text"
-            placeholder='Type any CLI command (or a typo like: codemate indx --bad-flag) and press Enter...'
+            placeholder='Type any CLI command (e.g. codemate evaluate, codemate doctor, or a typo like codemate doctr)...'
             class="flex-1 bg-transparent text-xs font-mono text-white placeholder-slate-500 focus:outline-none"
           />
           <button type="submit" class="px-4 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-950 font-bold text-xs font-mono">
@@ -165,18 +175,18 @@
       </div>
     </div>
 
-    <!-- RIGHT (5 cols): COSINE SIMILARITY METERS & REAL SOURCE CODE CITATIONS -->
+    <!-- RIGHT (5 cols): HYBRID SIMILARITY METERS & REAL SOURCE CODE CITATIONS -->
     <div class="lg:col-span-5 flex flex-col gap-4">
 
-      <!-- Animated Cosine Similarity Meter Bars -->
+      <!-- Animated Hybrid Similarity Meter Bars -->
       <div class="bg-slate-900/95 border border-slate-800 rounded-xl p-4">
         <div class="flex items-center justify-between mb-3">
           <div>
             <h3 class="text-sm font-bold text-white flex items-center gap-2">
               <i data-lucide="bar-chart-3" class="w-4 h-4 text-cyan-400"></i>
-              Live Vector Cosine Similarity Ranking (`.index/vectors.sqlite3`)
+              Hybrid Vector + Lexical Ranking (`.index/vectors.sqlite3`)
             </h3>
-            <p class="text-xs text-slate-400">Click any ranked chunk `[S1]..[S5]` to inspect exact lines below</p>
+            <p class="text-xs text-slate-400">0.78 Cosine + 0.22 BM25 Lexical · Click any chunk `[S1]..[S5]` to inspect lines &amp; AST symbols</p>
           </div>
         </div>
         <div id="similarityBarsContainer" class="space-y-2.5 min-h-[160px]"></div>
@@ -184,12 +194,13 @@
 
       <!-- Exact File & Line Source Inspector -->
       <div class="bg-slate-900/95 border border-slate-800 rounded-xl overflow-hidden flex-1 flex flex-col">
-        <div class="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <i data-lucide="file-code-2" class="w-4 h-4 text-emerald-400"></i>
-            <span id="inspectorFileTitle" class="text-xs font-mono font-bold text-white">codemate/indexer.py:1-49</span>
+        <div class="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <i data-lucide="file-code-2" class="w-4 h-4 text-emerald-400 shrink-0"></i>
+            <span id="inspectorFileTitle" class="text-xs font-mono font-bold text-white truncate">codemate/indexer.py:1-49</span>
+            <span id="inspectorSymbolBadge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40">Python</span>
           </div>
-          <span id="inspectorScoreBadge" class="text-xs font-mono px-2.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold">
+          <span id="inspectorScoreBadge" class="text-xs font-mono px-2.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold shrink-0">
             [S1] Score: 0.813
           </span>
         </div>
@@ -219,11 +230,11 @@
     let radarAngle = 0;
 
     const STAGES = [
-      { title: '1. GIT TREE', sub: 'tracker.py (SHA-256)', color: '#38bdf8' },
-      { title: '2. CHUNKER', sub: 'chunker.py (lines)', color: '#a855f7' },
-      { title: '3. FASTEMBED', sub: 'bge-small (384-D)', color: '#22d3ee' },
-      { title: '4. SQLITE .INDEX/', sub: 'vectors.sqlite3', color: '#10b981' },
-      { title: '5. CLI OUTPUT', sub: 'codemate.cli [S1..Sk]', color: '#f59e0b' }
+      { title: '1. GIT TREE & GUARD', sub: 'tracker.py • git_guard.py', color: '#38bdf8' },
+      { title: '2. AST CHUNKER v2', sub: 'chunker.py (lang+symbol)', color: '#a855f7' },
+      { title: '3. HYBRID RAG', sub: '0.78 BGE + 0.22 Lexical', color: '#22d3ee' },
+      { title: '4. SQLITE & ATLAS', sub: 'vectors + failures.sqlite3', color: '#10b981' },
+      { title: '5. CLI & AGENT', sub: 'evaluate • doctor • agent', color: '#f59e0b' }
     ];
 
     function resizeCanvas() {
@@ -258,7 +269,6 @@
       const h = canvas.parentElement.clientHeight;
       ctx.clearRect(0, 0, w, h);
 
-      // Subtle background grid lines
       ctx.strokeStyle = 'rgba(30, 41, 59, 0.45)';
       ctx.lineWidth = 1;
       for (let x = 0; x < w; x += 40) {
@@ -272,7 +282,6 @@
       const usableW = w - marginX * 2;
       const cy = h / 2;
 
-      // Connecting glowing conduit line
       const grad = ctx.createLinearGradient(marginX, cy, w - marginX, cy);
       grad.addColorStop(0, '#38bdf8');
       grad.addColorStop(0.5, '#22d3ee');
@@ -284,10 +293,8 @@
       ctx.lineTo(w - marginX, cy);
       ctx.stroke();
 
-      // Spawn continuous stream of particles
       if (Math.random() < 0.35) spawnParticle(false);
 
-      // Update & draw flowing data packets
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
         p.x += p.vx;
@@ -305,13 +312,11 @@
         ctx.restore();
       }
 
-      // Draw the 5 Pipeline Nodes
       radarAngle += 0.045;
       STAGES.forEach((st, idx) => {
         const nx = marginX + (usableW / (STAGES.length - 1)) * idx;
         const isCurrent = idx === activeStage;
 
-        // Outer spinning radar ring on active stage
         if (isCurrent) {
           ctx.save();
           ctx.translate(nx, cy);
@@ -325,7 +330,6 @@
           ctx.restore();
         }
 
-        // Node circle
         ctx.save();
         ctx.beginPath();
         ctx.fillStyle = '#0b111a';
@@ -338,13 +342,11 @@
         ctx.stroke();
         ctx.restore();
 
-        // Inner pulsing core
         ctx.beginPath();
         ctx.fillStyle = st.color;
         ctx.arc(nx, cy, isCurrent ? 8 + Math.sin(radarAngle * 2) * 2.5 : 5, 0, Math.PI * 2);
         ctx.fill();
 
-        // Labels
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 11px "JetBrains Mono", monospace';
         ctx.textAlign = 'center';
@@ -387,32 +389,43 @@
       setTimeout(() => wrap.classList.add('hidden'), 350);
     }
 
-    async function streamTextToTerminal(cmdText, rawOutput, isError = false) {
+    async function streamTextToTerminal(cmdText, rawOutput, isNonZero = false) {
       const term = document.getElementById('terminalOutput');
+      const cleaned = stripAnsi(rawOutput);
+      const isSyntaxError = cleaned.includes('CLI SYNTAX ERROR') || cleaned.includes('CLI Shell Syntax Error');
+      const isMissingApiKey = cleaned.includes('No API key is configured');
+
       const block = document.createElement('div');
-      block.className = isError
+      block.className = isSyntaxError
         ? 'p-3.5 rounded-xl bg-rose-950/30 border border-rose-500/50 space-y-2'
         : 'p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2';
+
+      let badgeHtml = '<span class="text-[10px] px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300">✓ REAL CLI OUTPUT</span>';
+      if (isSyntaxError) {
+        badgeHtml = '<span class="text-[10px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">✗ CLI SYNTAX ERROR (EXIT 2)</span>';
+      } else if (isMissingApiKey) {
+        badgeHtml = '<span class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">✓ LOCAL HYBRID RAG + API KEY HINT</span>';
+      }
+
       const header = document.createElement('div');
-      header.className = (isError ? 'text-rose-400' : 'text-emerald-400') + ' font-bold text-xs flex items-center justify-between';
-      header.innerHTML = `<span>$ ${escapeHtml(cmdText)}</span><span class="text-[10px] px-2 py-0.5 rounded ${isError ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'bg-cyan-500/15 text-cyan-300'}">${isError ? '✗ CLI SYNTAX ERROR (EXIT 2)' : '✓ REAL CLI OUTPUT'}</span>`;
+      header.className = (isSyntaxError ? 'text-rose-400' : 'text-emerald-400') + ' font-bold text-xs flex items-center justify-between';
+      header.innerHTML = `<span>$ ${escapeHtml(cmdText)}</span>${badgeHtml}`;
       const pre = document.createElement('pre');
-      pre.className = (isError ? 'text-rose-200' : 'text-slate-200') + ' whitespace-pre-wrap text-[11.5px] leading-relaxed overflow-x-auto';
+      pre.className = (isSyntaxError ? 'text-rose-200' : 'text-slate-200') + ' whitespace-pre-wrap text-[11.5px] leading-relaxed overflow-x-auto';
       block.appendChild(header);
       block.appendChild(pre);
       term.appendChild(block);
 
-      const cleaned = stripAnsi(rawOutput);
       const cleanLines = cleaned.split('\n');
       for (let i = 0; i < cleanLines.length; i++) {
         pre.textContent += (i > 0 ? '\n' : '') + cleanLines[i];
         term.scrollTop = term.scrollHeight;
-        await sleep(22);
+        await sleep(16);
       }
 
-      // Extract "Did you mean: $ codemate ..." and render 1-click Auto-Fix button!
-      if (isError) {
-        const match = cleaned.match(/\$\s+(codemate\s+[^\n│╯]+)/);
+      if (isSyntaxError) {
+        const match = cleaned.match(/Did you mean:\s*(?:\$\s*)?(codemate\s+[a-zA-Z0-9_-]+)/i) ||
+                      cleaned.match(/\$\s+(codemate\s+[^\n│╯]+)/);
         if (match && match[1]) {
           const suggestedCmd = match[1].trim();
           const fixBar = document.createElement('div');
@@ -420,7 +433,7 @@
           fixBar.innerHTML = `
             <span class="text-amber-300 text-xs">💡 Auto-fix suggestion detected: <code class="text-white font-bold">${escapeHtml(suggestedCmd)}</code></span>
             <button onclick="executeRealCLI('${suggestedCmd.replace(/'/g, "\\'")}')" class="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition">
-              Fix & Run Suggested Command
+              Fix &amp; Run Suggested Command
             </button>
           `;
           block.appendChild(fixBar);
@@ -434,11 +447,15 @@
       if (!hits || !hits.length) return;
       container.innerHTML = hits.map((h, idx) => {
         const pct = Math.max(8, Math.min(100, Math.round(h.score * 100)));
+        const meta = [h.language, h.symbol].filter(Boolean).join(' · ');
         return `
           <div onclick="renderHitInInspector(${idx})" class="p-2.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-cyan-500/50 cursor-pointer transition">
-            <div class="flex items-center justify-between text-xs font-mono mb-1">
-              <span class="text-cyan-300 font-semibold">[${h.label}] ${escapeHtml(h.path)}:${h.start_line}-${h.end_line}</span>
-              <span class="text-emerald-400 font-bold">${h.score.toFixed(3)}</span>
+            <div class="flex items-center justify-between text-xs font-mono mb-1 gap-2">
+              <span class="text-cyan-300 font-semibold truncate">[${h.label}] ${escapeHtml(h.path)}:${h.start_line}-${h.end_line}</span>
+              <div class="flex items-center gap-2 shrink-0">
+                ${meta ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30">${escapeHtml(meta)}</span>` : ''}
+                <span class="text-emerald-400 font-bold">${h.score.toFixed(3)}</span>
+              </div>
             </div>
             <div class="w-full h-2 bg-slate-900 rounded-full overflow-hidden">
               <div class="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-500" style="width: ${pct}%"></div>
@@ -452,6 +469,8 @@
       const hit = CURRENT_HITS[idx];
       if (!hit) return;
       document.getElementById('inspectorFileTitle').textContent = `${hit.path}:${hit.start_line}-${hit.end_line}`;
+      const meta = [hit.language, hit.symbol].filter(Boolean).join(' · ') || 'Source';
+      document.getElementById('inspectorSymbolBadge').textContent = meta;
       document.getElementById('inspectorScoreBadge').textContent = `[${hit.label}] Score: ${hit.score.toFixed(3)}`;
       document.getElementById('inspectorBlameFooter').textContent = `git blame: ${hit.blame || 'Tracked working-tree file'}`;
 
@@ -471,7 +490,6 @@
       await animateProgressBar(`Running real subprocess: python -m codemate.cli (${cmdStr})`, 550);
 
       try {
-        // 1. Run the actual CLI subprocess on the backend
         const cliRes = await fetch(`${API_BASE}/api/run-cli`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -485,8 +503,7 @@
         const outputText = (cliData.stdout || '') + (cliData.stderr ? '\n' + cliData.stderr : '');
         await streamTextToTerminal(cmdStr, outputText || 'Command completed (exit 0).', !cliData.ok);
 
-        // 2. If it's an `ask` command and succeeded, also fetch structured hits to animate the right-hand similarity bars
-        if (cliData.ok && cmdStr.includes(' ask ')) {
+        if (cmdStr.includes(' ask ')) {
           const match = cmdStr.match(/ask\s+["']?([^"']+)["']?/i);
           const q = match ? match[1] : 'How does index_repository work?';
           const askRes = await fetch(`${API_BASE}/api/ask`, {
@@ -510,10 +527,14 @@
     async function runFullLiveDemo() {
       clearTerminal();
       await executeRealCLI('codemate track');
-      await sleep(300);
+      await sleep(250);
       await executeRealCLI('codemate index');
-      await sleep(300);
-      await executeRealCLI('codemate ask "How does index_repository store chunks and embeddings in SQLite?"');
+      await sleep(250);
+      await executeRealCLI('codemate evaluate');
+      await sleep(250);
+      await executeRealCLI('codemate doctor');
+      await sleep(250);
+      await executeRealCLI('codemate ask "How does index_repository store chunks, language, and symbol metadata in SQLite?"');
     }
 
     function clearTerminal() {
@@ -532,7 +553,7 @@
 
     window.addEventListener('DOMContentLoaded', () => {
       lucide.createIcons();
-      executeRealCLI('codemate ask "How does index_repository store chunks and embeddings in SQLite?"');
+      executeRealCLI('codemate ask "How does index_repository store chunks, language, and symbol metadata in SQLite?"');
     });
   </script>
 </body>

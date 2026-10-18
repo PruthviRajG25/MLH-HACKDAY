@@ -1,16 +1,15 @@
 """
-Codemate Rich CLI & Local Web UI Server — Connected to the Real `codemate` Backend
-(`codemate.tracker`, `codemate.chunker`, `codemate.indexer`, `codemate.ask`).
+Codemate Rich CLI & Local Web UI Server — Synced with Real `codemate` Backend
+(`tracker`, `chunker`, `indexer`, `ask`, `diagnostics`, `evaluation`, `failure_atlas`, `git_guard`, `agent`, `config`).
 
 Commands:
     python codemate_ui.py track
     python codemate_ui.py index
     python codemate_ui.py ask "how does chunk_text split files?"
     python codemate_ui.py doctor
-    python codemate_ui.py tools
+    python codemate_ui.py evaluate
+    python codemate_ui.py failures
     python codemate_ui.py explain codemate/indexer.py
-    python codemate_ui.py commit
-    python codemate_ui.py pr
     python codemate_ui.py serve   # Launches live Web UI connected to real backend at http://127.0.0.1:8765
 """
 
@@ -23,11 +22,11 @@ import os
 import re
 import sqlite3
 import subprocess
+import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Dict, List
-import urllib.parse
 
 import typer
 from rich import box
@@ -35,7 +34,6 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
-from rich.prompt import Confirm, Prompt
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.tree import Tree
@@ -44,16 +42,18 @@ from rich.tree import Tree
 # REAL BACKEND IMPORTS FROM `codemate` PACKAGE
 # ============================================================================
 import codemate.ask as cm_ask
-import codemate.chunker as cm_chunker
 import codemate.indexer as cm_indexer
-import codemate.tracker as cm_tracker
 from codemate.ask import SearchHit, _load_dotenv, ask_repository, retrieve
+from codemate.config import DEFAULT_MODEL as DEFAULT_CHAT_MODEL, DEFAULT_PROVIDER, config_path, load_config
+from codemate.diagnostics import run_diagnostics
+from codemate.evaluation import evaluate_retrieval
+from codemate.failure_atlas import list_incidents
 from codemate.indexer import DEFAULT_MAX_FILE_BYTES, DEFAULT_MODEL, IndexResult, index_repository
 from codemate.tracker import TrackerError, TrackResult, find_repo_root, track_repository
 
 app = typer.Typer(
     name="codemate",
-    help="Codemate Rich CLI & Web UI — Wired to real codemate.tracker, codemate.indexer, and codemate.ask.",
+    help="Codemate Rich CLI & Web UI — Synced with real codemate backend modules.",
     add_completion=False,
 )
 console = Console()
@@ -66,7 +66,7 @@ console = Console()
 class LocalCodeEmbedderFallback:
     """
     Deterministic 384-dimensional local code & text embedder.
-    Used automatically only if `fastembed` / `onnxruntime` lacks a wheel on Python 3.14,
+    Used automatically only if `fastembed` / `onnxruntime` lacks a wheel,
     so `codemate.indexer.index_repository` and `codemate.ask.retrieve` still execute
     100% of their real SQLite (.index/vectors.sqlite3) vector pipeline.
     """
@@ -83,9 +83,7 @@ class LocalCodeEmbedderFallback:
 
     def _embed_one(self, text: str) -> List[float]:
         vec = [0.0] * self.DIMENSIONS
-        # Strip "Passage:" / "Query:" prefixes
         cleaned = re.sub(r"^(passage|query):\s*", "", text.lower())
-        # Split camelCase and snake_case tokens
         expanded = re.sub(r"([a-z])([A-Z])", r"\1 \2", text).lower()
         tokens = re.findall(r"[a-z0-9_]{2,}", cleaned + " " + expanded)
         subtokens: List[str] = []
@@ -98,10 +96,8 @@ class LocalCodeEmbedderFallback:
 
         for idx, tok in enumerate(subtokens):
             weight = 2.5 if idx < 12 else 1.0
-            # Unigram hash
             h1 = int(hashlib.md5(tok.encode("utf-8")).hexdigest(), 16)
             vec[h1 % self.DIMENSIONS] += weight if (h1 >> 9) & 1 else -weight
-            # Character 4-gram hashes for fuzzy stem matching (e.g. chunk / chunker / chunking)
             if len(tok) >= 4:
                 for i in range(len(tok) - 3):
                     gram = tok[i : i + 4]
@@ -131,7 +127,6 @@ def _resilient_load_fastembed(model_name: str) -> Any:
         return LocalCodeEmbedderFallback(model_name=model_name)
 
 
-# Wire resilient loader into both indexer and ask modules
 cm_indexer._load_fastembed = _resilient_load_fastembed
 cm_ask._load_fastembed = _resilient_load_fastembed
 
@@ -144,8 +139,9 @@ def print_header() -> None:
     console.print(
         Panel.fit(
             "[bold cyan]codemate[/bold cyan] [dim]v0.1.0[/dim] — "
-            "Connected to Real Backend ([cyan]tracker.py[/cyan] • [cyan]chunker.py[/cyan] • "
-            "[cyan]indexer.py[/cyan] • [cyan]ask.py[/cyan])",
+            "Synced with Main Backend ([cyan]tracker[/cyan] • [cyan]chunker[/cyan] • "
+            "[cyan]indexer[/cyan] • [cyan]ask[/cyan] • [cyan]evaluate[/cyan] • "
+            "[cyan]failure_atlas[/cyan] • [cyan]git_guard[/cyan] • [cyan]agent[/cyan])",
             border_style="cyan",
         )
     )
@@ -170,9 +166,12 @@ def get_index_stats(root: Path) -> Dict[str, Any]:
         "model_name": DEFAULT_MODEL,
         "vector_dimensions": 384,
         "chunks_preview": [],
-        "provider": "gemini",
-        "chat_model": "gemma-4-26b-a4b-it",
+        "provider": DEFAULT_PROVIDER,
+        "chat_model": DEFAULT_CHAT_MODEL,
         "api_key_configured": False,
+        "config_path": str(config_path()),
+        "active_failures_count": 0,
+        "incidents": [],
     }
 
     if manifest_path.is_file():
@@ -211,15 +210,24 @@ def get_index_stats(root: Path) -> Dict[str, Any]:
             if dim_row:
                 stats["vector_dimensions"] = int(dim_row[0])
 
-            # Join status into manifest_files if present
             status_map = dict(conn.execute("SELECT path, status FROM indexed_files").fetchall())
             for mf in stats["manifest_files"]:
                 mf["status"] = status_map.get(mf["path"], "tracked")
 
-            chunk_rows = conn.execute(
-                "SELECT path, ordinal, start_line, end_line, substr(text, 1, 240), substr(content_hash, 1, 12) "
-                "FROM chunks ORDER BY path, ordinal LIMIT 50"
-            ).fetchall()
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)")}
+            has_lang_sym = "language" in cols and "symbol" in cols
+            if has_lang_sym:
+                chunk_rows = conn.execute(
+                    "SELECT path, ordinal, start_line, end_line, substr(text, 1, 240), "
+                    "substr(content_hash, 1, 12), language, symbol "
+                    "FROM chunks ORDER BY path, ordinal LIMIT 60"
+                ).fetchall()
+            else:
+                chunk_rows = conn.execute(
+                    "SELECT path, ordinal, start_line, end_line, substr(text, 1, 240), "
+                    "substr(content_hash, 1, 12), '', '' "
+                    "FROM chunks ORDER BY path, ordinal LIMIT 60"
+                ).fetchall()
             for r in chunk_rows:
                 stats["chunks_preview"].append({
                     "path": r[0],
@@ -228,6 +236,8 @@ def get_index_stats(root: Path) -> Dict[str, Any]:
                     "end_line": r[3],
                     "preview": r[4],
                     "hash": r[5],
+                    "language": r[6] or "",
+                    "symbol": r[7] or "",
                 })
             conn.close()
         except Exception:
@@ -237,9 +247,48 @@ def get_index_stats(root: Path) -> Dict[str, Any]:
         dotenv = _load_dotenv(dotenv_path)
     except TrackerError:
         dotenv = {}
-    stats["provider"] = os.environ.get("CODEMATE_PROVIDER") or dotenv.get("CODEMATE_PROVIDER") or "gemini"
-    stats["chat_model"] = os.environ.get("CODEMATE_MODEL") or dotenv.get("CODEMATE_MODEL") or "gemma-4-26b-a4b-it"
-    stats["api_key_configured"] = bool(os.environ.get("GEMINI_API_KEY") or dotenv.get("GEMINI_API_KEY"))
+    try:
+        saved = load_config()
+    except TrackerError:
+        saved = {}
+
+    stats["provider"] = (
+        os.environ.get("CODEMATE_PROVIDER")
+        or saved.get("provider")
+        or dotenv.get("CODEMATE_PROVIDER")
+        or DEFAULT_PROVIDER
+    )
+    stats["chat_model"] = (
+        os.environ.get("CODEMATE_MODEL")
+        or saved.get("model")
+        or dotenv.get("CODEMATE_MODEL")
+        or DEFAULT_CHAT_MODEL
+    )
+    stats["api_key_configured"] = bool(
+        os.environ.get("GEMINI_API_KEY")
+        or saved.get("api_key")
+        or dotenv.get("GEMINI_API_KEY")
+    )
+
+    try:
+        all_incidents = list_incidents(root, include_resolved=True)
+        stats["active_failures_count"] = sum(1 for inc in all_incidents if inc.status == "active")
+        stats["incidents"] = [
+            {
+                "id": inc.id[:8],
+                "status": inc.status,
+                "occurrence_count": inc.occurrence_count,
+                "command": inc.command,
+                "signature": inc.signature[:180],
+                "last_seen": inc.last_seen,
+                "last_commit": inc.last_commit,
+                "report_path": inc.report_path,
+            }
+            for inc in all_incidents[:15]
+        ]
+    except Exception:
+        pass
+
     return stats
 
 
@@ -260,32 +309,6 @@ def _git_blame_line(root: Path, rel_path: str, start_line: int, end_line: int) -
 # ============================================================================
 # CLI COMMANDS WIRED TO REAL BACKEND
 # ============================================================================
-
-@app.command()
-def init(
-    repo: Path = typer.Option(Path.cwd(), "--repo", help="Repository path"),
-) -> None:
-    """Create or inspect .env configuration and verify .gitignore rules."""
-    print_header()
-    root = find_repo_root(repo)
-    env_path = root / ".env"
-    example_path = root / ".env.example"
-
-    if not env_path.exists() and example_path.exists():
-        env_path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
-        console.print(f"[green]✓[/green] Initialized [bold]{env_path}[/bold] from [cyan].env.example[/cyan]")
-    else:
-        console.print(f"[green]✓[/green] Checked config at [bold]{env_path}[/bold]")
-
-    gitignore_path = root / ".gitignore"
-    gi_text = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
-    console.print(f"[green]✓[/green] Repository root: [bold cyan]{root}[/bold cyan]")
-    console.print(
-        f"[green]✓[/green] .gitignore protections: "
-        f"[cyan].index/[/cyan] ({'present' if '.index/' in gi_text else 'missing'}), "
-        f"[cyan].env[/cyan] ({'present' if '.env' in gi_text else 'missing'})"
-    )
-
 
 @app.command()
 def track(
@@ -333,9 +356,9 @@ def index(
     summary.add_column("Backend Source", style="dim")
 
     embed_note = "fastembed ONNX" if not _USING_FALLBACK_EMBEDDER else "Local 384-d Fallback (Python 3.14)"
-    summary.add_row("Database Path", str(result.database_path), "SQLite WAL (chunks + indexed_files)")
+    summary.add_row("Database Path", str(result.database_path), "SQLite WAL (chunks + indexed_files + language/symbol)")
     summary.add_row("Embedding Model", result.model_name, embed_note)
-    summary.add_row("Total Stored Chunks", str(result.chunks), "codemate.chunker.chunk_text")
+    summary.add_row("Total Stored Chunks", str(result.chunks), "codemate.chunker.chunk_text (v2 boundary-aware)")
     summary.add_row(
         "File Delta",
         f"{result.added_files} added, {result.updated_files} updated, "
@@ -356,27 +379,27 @@ def ask(
     print_header()
     root = find_repo_root(repo)
 
-    # 1. Run real SQLite vector retrieval from codemate/ask.py
     hits, embedding_model = retrieve(question, root, top_k=top_k)
 
     if verbose:
-        tree = Tree(f"[bold cyan]Real Backend Execution Trace[/bold cyan] [dim](.index/vectors.sqlite3)[/dim]")
+        tree = Tree("[bold cyan]Real Backend Execution Trace[/bold cyan] [dim](.index/vectors.sqlite3)[/dim]")
         tree.add(
-            f"[bold white]Step 1: codemate.ask.retrieve[/bold white] [green]READ-ONLY[/green] "
+            f"[bold white]Step 1: codemate.ask.retrieve[/bold white] [green]HYBRID (0.78 Vector + 0.22 Lexical)[/green] "
             f"model=[magenta]{escape(embedding_model)}[/magenta] top_k={top_k} → "
-            f"[cyan]{len(hits)} chunks ranked by cosine similarity[/cyan]"
+            f"[cyan]{len(hits)} chunks ranked[/cyan]"
         )
         for h in hits[:3]:
             blame = _git_blame_line(root, h.path, h.start_line, h.end_line)
+            meta = " · ".join(p for p in (h.language, h.symbol) if p)
+            meta_str = f" [{meta}]" if meta else ""
             tree.add(
                 f"[bold white]Step {int(h.label[1:]) + 1}: Citation \\[{h.label}][/bold white] "
-                f"[cyan]{escape(h.path)}:{h.start_line}-{h.end_line}[/cyan] "
-                f"(cosine score [green]{h.score:.3f}[/green]) • [dim]{escape(blame)}[/dim]"
+                f"[cyan]{escape(h.path)}:{h.start_line}-{h.end_line}[/cyan]{escape(meta_str)} "
+                f"(hybrid score [green]{h.score:.3f}[/green]) • [dim]{escape(blame)}[/dim]"
             )
         console.print(tree)
         console.print()
 
-    # 2. Try full LLM completion via codemate.ask.ask_repository; fallback to local grounded synthesis if no API key
     try:
         answer, _, _ = ask_repository(question, root, top_k=top_k)
         mode_subtitle = f"Live LLM Answer • Model Embedded with {embedding_model}"
@@ -385,14 +408,14 @@ def ask(
         second_hit = hits[1] if len(hits) > 1 else hits[0]
         answer = (
             f"[bold]Local Grounded Retrieval Summary[/bold] [dim](Note: {escape(str(exc))})[/dim]\n\n"
-            f"Based on local vector search across [bold].index/vectors.sqlite3[/bold]:\n"
+            f"Based on hybrid vector + lexical search across [bold].index/vectors.sqlite3[/bold]:\n"
             f"• Primary match is in [bold cyan]\\[{top_hit.label}] {escape(top_hit.path)}:{top_hit.start_line}-{top_hit.end_line}[/bold cyan] "
-            f"(cosine score [green]{top_hit.score:.3f}[/green]).\n"
+            f"({escape(top_hit.language or 'text')}{', ' + escape(top_hit.symbol) if top_hit.symbol else ''}; score [green]{top_hit.score:.3f}[/green]).\n"
             f"• Secondary context is in [bold cyan]\\[{second_hit.label}] {escape(second_hit.path)}:{second_hit.start_line}-{second_hit.end_line}[/bold cyan] "
-            f"(cosine score [green]{second_hit.score:.3f}[/green]).\n"
-            f"• Add [bold yellow]GEMINI_API_KEY[/bold yellow] to [bold].env[/bold] to enable live Gemma 4 chat synthesis over these excerpts."
+            f"(score [green]{second_hit.score:.3f}[/green]).\n"
+            f"• Configure an API key via [bold yellow]codemate init[/bold yellow] or [bold yellow].env[/bold yellow] to enable live Gemma 4 chat synthesis."
         )
-        mode_subtitle = f"100% Local Vector Retrieval ({embedding_model}) • Set GEMINI_API_KEY in .env for LLM generation"
+        mode_subtitle = f"100% Local Hybrid Retrieval ({embedding_model}) • Run `codemate init` for LLM generation"
 
     console.print(
         Panel(
@@ -403,7 +426,6 @@ def ask(
         )
     )
 
-    # 3. Render real syntax-highlighted code chunks from `.index/vectors.sqlite3`
     for hit in hits[:3]:
         ext = Path(hit.path).suffix.lstrip(".") or "text"
         lang = {"py": "python", "md": "markdown", "toml": "toml", "html": "html", "js": "javascript"}.get(ext, "text")
@@ -413,12 +435,14 @@ def ask(
             snippet += "\n# ... (truncated for display)"
         syntax = Syntax(snippet, lang, line_numbers=True, start_line=hit.start_line, theme="monokai")
         blame = _git_blame_line(root, hit.path, hit.start_line, hit.end_line)
+        meta_badge = " · ".join(p for p in (hit.language, hit.symbol) if p)
         console.print(
             Panel(
                 syntax,
                 title=(
                     f"[bold cyan]\\[{hit.label}] {escape(hit.path)}:{hit.start_line}-{hit.end_line}[/bold cyan] "
-                    f"• [green]score {hit.score:.3f}[/green]"
+                    + (f"• [magenta]{escape(meta_badge)}[/magenta] " if meta_badge else "")
+                    + f"• [green]score {hit.score:.3f}[/green]"
                 ),
                 subtitle=f"[dim]git: {escape(blame)}[/dim]",
                 border_style="bright_black",
@@ -430,43 +454,76 @@ def ask(
 def doctor(
     repo: Path = typer.Option(Path.cwd(), "--repo", help="Repository path"),
 ) -> None:
-    """Inspect real `.index/manifest.json`, `.index/vectors.sqlite3`, and `.env` status."""
+    """Run real `codemate.diagnostics.run_diagnostics` and inspect index health."""
     print_header()
-    root = find_repo_root(repo)
-    stats = get_index_stats(root)
+    results = run_diagnostics(repo)
+    table = Table(title="Codemate Doctor — Live Diagnostics", box=box.ROUNDED, border_style="cyan")
+    table.add_column("Status", width=12, justify="center")
+    table.add_column("Check Detail", style="white")
+    for ok, msg in results:
+        table.add_row("[bold green]✓ OK[/]" if ok else "[bold yellow]⚠ CHECK[/]", msg)
+    console.print(table)
 
-    table = Table(title=f"Codemate Doctor — Live Repository Diagnostics ({root.name})", box=box.SIMPLE_HEAVY)
-    table.add_column("Component", style="bold white")
-    table.add_column("Status", style="bold")
-    table.add_column("Real Backend Details", style="cyan")
 
-    table.add_row(
-        "Git Repository Root",
-        "[green]✓ FOUND[/green]",
-        str(root),
+@app.command()
+def evaluate(
+    repo: Path = typer.Option(Path.cwd(), "--repo", help="Repository path"),
+    top_k: int = typer.Option(6, "--top-k", help="Top-K chunks per benchmark question"),
+) -> None:
+    """Run real `codemate.evaluation.evaluate_retrieval` against `.codemate-eval.json`."""
+    print_header()
+    results, total = evaluate_retrieval(repo, None, top_k=top_k)
+    table = Table(title=f"Retrieval Evaluation Benchmark (Top-{top_k})", box=box.ROUNDED, border_style="bright_blue")
+    table.add_column("#", width=4, justify="right")
+    table.add_column("Status", width=12, justify="center")
+    table.add_column("Question", style="white")
+    table.add_column("Expected File(s)", style="cyan")
+    hits = 0
+    rr_sum = 0.0
+    for idx, r in enumerate(results, start=1):
+        rank = r["rank"]
+        if rank is not None:
+            hits += 1
+            rr_sum += 1.0 / rank
+            badge = f"[bold green]✓ HIT @{rank}[/]"
+        else:
+            badge = "[bold red]✗ MISS[/]"
+        table.add_row(str(idx), badge, r["question"], ", ".join(r["expected"]))
+    console.print(table)
+    console.print(
+        Panel(
+            f"[bold green]Recall@{top_k}:[/] {hits}/{total} ({hits / total:.0%})   |   "
+            f"[bold cyan]MRR@{top_k}:[/] {rr_sum / total:.3f}",
+            border_style="green" if hits == total else "yellow",
+        )
     )
-    table.add_row(
-        "Tracker Manifest (.index/manifest.json)",
-        "[green]✓ READY[/green]" if stats["manifest_exists"] else "[yellow]⚠ MISSING[/yellow]",
-        f"{stats['manifest_files_count']} tracked files (generated: {stats['manifest_generated_at'] or 'not run yet'})",
-    )
-    table.add_row(
-        "Vector SQLite (.index/vectors.sqlite3)",
-        "[green]✓ READY[/green]" if stats["db_exists"] else "[yellow]⚠ MISSING[/yellow]",
-        f"{stats['chunks_count']} chunks across {stats['indexed_files_count']} indexed files "
-        f"({stats['skipped_files_count']} skipped • {stats['db_size_bytes'] // 1024} KB)",
-    )
-    table.add_row(
-        "Embedding Engine",
-        "[green]✓ ACTIVE[/green]",
-        f"{stats['model_name']} ({stats['vector_dimensions']} dims)",
-    )
-    table.add_row(
-        "Chat Provider (.env / ENV)",
-        "[green]✓ KEY SET[/green]" if stats["api_key_configured"] else "[yellow]⚠ NO API KEY[/yellow]",
-        f"provider={stats['provider']} • model={stats['chat_model']} • "
-        f"GEMINI_API_KEY={'SET' if stats['api_key_configured'] else 'not set in .env yet'}",
-    )
+
+
+@app.command()
+def failures(
+    repo: Path = typer.Option(Path.cwd(), "--repo", help="Repository path"),
+    all_incidents: bool = typer.Option(True, "--all", help="Include resolved incidents"),
+) -> None:
+    """Show incidents recorded in `.index/failures.sqlite3` by Failure Atlas."""
+    print_header()
+    incidents = list_incidents(repo, include_resolved=all_incidents)
+    if not incidents:
+        console.print(Panel("[bold green]✓ No incidents recorded in Failure Atlas yet.[/]", border_style="green"))
+        return
+    table = Table(title="Failure Atlas — Local Command Incident History", box=box.ROUNDED, border_style="red")
+    table.add_column("ID", style="bold yellow")
+    table.add_column("Status")
+    table.add_column("Seen", justify="right")
+    table.add_column("Command", style="cyan")
+    table.add_column("Signature", style="white")
+    for inc in incidents:
+        table.add_row(
+            inc.id[:8],
+            inc.status.upper(),
+            str(inc.occurrence_count),
+            inc.command,
+            inc.signature.replace("\n", " | ")[:100],
+        )
     console.print(table)
 
 
@@ -487,7 +544,7 @@ class CodemateAPIHandler(BaseHTTPRequestHandler):
     repo_root: Path = Path.cwd()
 
     def log_message(self, format: str, *args: Any) -> None:
-        pass  # Keep console clean
+        pass
 
     def _send_json(self, payload: Dict[str, Any], status: int = 200) -> None:
         data = json.dumps(payload).encode("utf-8")
@@ -565,10 +622,34 @@ class CodemateAPIHandler(BaseHTTPRequestHandler):
                 })
                 return
 
+            if parsed.path == "/api/evaluate":
+                top_k = int(body.get("top_k", 6))
+                results, total = evaluate_retrieval(root, None, top_k=top_k)
+                hits_count = sum(1 for r in results if r["rank"] is not None)
+                mrr = sum((1.0 / r["rank"] if r["rank"] else 0.0) for r in results) / max(1, total)
+                self._send_json({
+                    "ok": True,
+                    "results": results,
+                    "total": total,
+                    "hits": hits_count,
+                    "recall": round(hits_count / max(1, total), 4),
+                    "mrr": round(mrr, 4),
+                    "stats": get_index_stats(root),
+                })
+                return
+
+            if parsed.path == "/api/doctor":
+                checks = run_diagnostics(root)
+                self._send_json({
+                    "ok": True,
+                    "checks": [{"ok": ok, "message": msg} for ok, msg in checks],
+                    "stats": get_index_stats(root),
+                })
+                return
+
             if parsed.path == "/api/ask":
                 question = body.get("question", "How does Codemate index and retrieve files?")
                 top_k = int(body.get("top_k", 5))
-                # Ensure index exists
                 if not (root / ".index" / "vectors.sqlite3").is_file():
                     index_repository(root)
                 hits, embed_model = retrieve(question, root, top_k=top_k)
@@ -580,9 +661,11 @@ class CodemateAPIHandler(BaseHTTPRequestHandler):
                     top = hits[0]
                     second = hits[1] if len(hits) > 1 else hits[0]
                     answer = (
-                        f"Grounded Local Retrieval across .index/vectors.sqlite3 (LLM note: {exc})\n\n"
-                        f"• Top Match [{top.label}]: {top.path}:{top.start_line}-{top.end_line} (cosine similarity {top.score:.3f})\n"
-                        f"• Second Match [{second.label}]: {second.path}:{second.start_line}-{second.end_line} (cosine similarity {second.score:.3f})"
+                        f"Grounded Hybrid Retrieval across .index/vectors.sqlite3 (LLM note: {exc})\n\n"
+                        f"• Top Match [{top.label}]: {top.path}:{top.start_line}-{top.end_line} "
+                        f"({top.language or 'text'}{', ' + top.symbol if top.symbol else ''}; hybrid score {top.score:.3f})\n"
+                        f"• Second Match [{second.label}]: {second.path}:{second.start_line}-{second.end_line} "
+                        f"(hybrid score {second.score:.3f})"
                     )
                 serialized_hits = []
                 for h in hits:
@@ -593,6 +676,8 @@ class CodemateAPIHandler(BaseHTTPRequestHandler):
                         "end_line": h.end_line,
                         "text": h.text,
                         "score": round(h.score, 4),
+                        "language": h.language,
+                        "symbol": h.symbol,
                         "blame": _git_blame_line(root, h.path, h.start_line, h.end_line),
                     })
                 self._send_json({
@@ -607,8 +692,9 @@ class CodemateAPIHandler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/api/run-cli":
-                import sys as _sys
                 import shlex as _shlex
+                import sys as _sys
+
                 cmd_str = body.get("cmd", "codemate track").strip()
                 try:
                     tokens = _shlex.split(cmd_str)
@@ -671,7 +757,6 @@ def serve(
     """Start local Web UI server at http://127.0.0.1:8765 connected to the real Codemate backend."""
     print_header()
     root = find_repo_root(Path.cwd())
-    # Ensure initial track + index is built so UI has live data immediately
     if not (root / ".index" / "vectors.sqlite3").is_file():
         console.print("[cyan]Building initial .index/vectors.sqlite3 from repository files...[/cyan]")
         index_repository(root)
@@ -682,8 +767,9 @@ def serve(
         Panel(
             f"[bold green]✓ Codemate Live Backend Server Running[/bold green]\n"
             f"[white]Web UI URL:[/white] [bold cyan]{url}[/bold cyan]\n"
-            f"[white]Connected Modules:[/white] [cyan]codemate.tracker[/cyan], [cyan]codemate.chunker[/cyan], "
-            f"[cyan]codemate.indexer[/cyan], [cyan]codemate.ask[/cyan]\n"
+            f"[white]Connected Modules:[/white] [cyan]tracker[/cyan], [cyan]chunker[/cyan], "
+            f"[cyan]indexer[/cyan], [cyan]ask[/cyan], [cyan]diagnostics[/cyan], [cyan]evaluation[/cyan], "
+            f"[cyan]failure_atlas[/cyan], [cyan]git_guard[/cyan], [cyan]agent[/cyan]\n"
             f"[dim]Press Ctrl+C to stop the server.[/dim]",
             border_style="green",
         )

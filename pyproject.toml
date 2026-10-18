@@ -1,14 +1,21 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "codemate"
 version = "0.1.0"
-description = "A local tracker for Git codebases"
+description = "A local-first Gemma 4 coding assistant for repository-grounded debugging"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = ["certifi>=2024.12.14"]
+
+[project.urls]
+Homepage = "https://github.com/PruthviRajG25/MLH-HACKDAY"
+Repository = "https://github.com/PruthviRajG25/MLH-HACKDAY"
+Issues = "https://github.com/PruthviRajG25/MLH-HACKDAY/issues"
 
 [project.optional-dependencies]
 embeddings = ["fastembed>=0.7"]
