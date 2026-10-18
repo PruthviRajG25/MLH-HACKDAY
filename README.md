@@ -1,15 +1,21 @@
 # Codemate
 
-**A Gemma 4 coding companion that understands your repository, diagnoses real command failures, and proposes repairs you approve.**
+**A retrieval-augmented coding assistant powered by Gemma 4, an open-weight AI model.**
 
-Codemate is a local-first command-line tool for exploring and debugging Git
-codebases. It builds a searchable index on your machine, grounds answers in
-source code, remembers recurring failures, and can check for likely push/pull
-conflicts before Git changes your working tree.
+Codemate uses **RAG (retrieval-augmented generation)** to find relevant code in a
+local repository index before asking Gemma 4 to answer questions or diagnose
+command failures. It cites the source files behind its answers, remembers
+recurring failures, checks for likely Git push/pull conflicts, and can propose
+code repairs for the developer to review and approve.
 
-> **Hacktoberfest 2026 · Best Use of Gemma** — Gemma 4 is Codemate's default chat model.
-> Codemate uses it for codebase questions, evidence-based failure diagnosis,
-> merge-conflict analysis, and approval-gated repair proposals.
+The default Gemma 4 model is an open-weight model accessed through Google's
+Gemini API; inference is hosted, not run locally. Repository tracking,
+embeddings, and retrieval run locally, and Codemate sends selected code
+excerpts and relevant prompts to the configured chat provider.
+
+> **Hacktoberfest 2026 · Best Use of Gemma** — Codemate puts Gemma 4 at the
+> answer and diagnosis stage of a local RAG workflow, grounded in retrieved
+> repository code rather than a prompt alone.
 > See the [Hacktoberfest 2026 challenge hub](https://dev.to/challenges/hf26).
 
 ## Why Codemate?
