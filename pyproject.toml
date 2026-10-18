@@ -9,7 +9,7 @@ description = "A local-first Gemma 4 coding assistant for repository-grounded de
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.15"
 dependencies = ["certifi>=2024.12.14"]
 
 [project.urls]

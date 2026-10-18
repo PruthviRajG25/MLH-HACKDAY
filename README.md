@@ -39,14 +39,16 @@ complete proposed diff, and requires approval before writing files.
 
 ## Quick start
 
-**Requirements:** Python 3.10 or newer, Git, and a Gemini API key for the
-default Gemma 4 setup.
+**Requirements:** Python 3.10–3.14, Git, and a Gemini API key for the
+default Gemma 4 setup. Python 3.15 is not supported yet because the local
+embedding stack depends on ONNX Runtime, which does not currently publish
+Python 3.15 packages.
 
 Install the current source from GitHub with `pipx` (recommended for command-line
 apps; it creates an isolated environment):
 
 ```sh
-pipx install 'codemate[embeddings] @ git+https://github.com/PruthviRajG25/MLH-HACKDAY.git'
+pipx install --python 3.14 'codemate[embeddings] @ git+https://github.com/PruthviRajG25/MLH-HACKDAY.git'
 codemate init
 codemate index
 codemate ask "How is this project structured?"
@@ -238,8 +240,10 @@ excluded by `.gitignore`; tests and evaluation data are not ignored.
 
 ## Install on another computer
 
-Codemate is a Python command-line application. A user needs Python 3.10 or
-newer, Git, and a supported operating system. The GitHub install command above
+Codemate is a Python command-line application. A user needs Python 3.10–3.14,
+Git, and a supported operating system. Python 3.15 is not supported yet because
+the ONNX Runtime dependency used for local embeddings does not currently publish
+Python 3.15 packages. The GitHub install command above
 works on macOS, Linux, and Windows when Python, Git, `pipx`, and the project's
 dependencies are available. Run `codemate init` once on each computer to save
 that user's provider settings, then run `codemate index` inside a repository.
@@ -253,7 +257,7 @@ it from any Git repository on this computer.
 
 #### 1. Install the prerequisites
 
-Install [Python 3.11 or newer](https://www.python.org/downloads/windows/) and
+Install [Python 3.14](https://www.python.org/downloads/windows/) and
 [Git for Windows](https://git-scm.com/download/win). In the Python installer,
 enable **Add Python to PATH**. Git is needed both to download Codemate and for
 Codemate to inspect projects.
@@ -287,7 +291,7 @@ pipx --version
 Run this command in PowerShell:
 
 ```powershell
-pipx install "codemate[embeddings] @ git+https://github.com/PruthviRajG25/MLH-HACKDAY.git"
+pipx install --python 3.14 "codemate[embeddings] @ git+https://github.com/PruthviRajG25/MLH-HACKDAY.git"
 ```
 
 `pipx` uses Git to fetch the repository, installs Codemate and its embedding
