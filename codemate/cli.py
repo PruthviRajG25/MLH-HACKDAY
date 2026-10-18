@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TextIO
 
 from .ask import ask_repository
+from .agent import apply_changes, repair_repository, render_diff
 from .config import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL as DEFAULT_CHAT_MODEL,
@@ -34,6 +35,7 @@ from .failure_atlas import (
     save_diagnosis,
     save_report_path,
 )
+from .git_guard import GitPreflight, preflight_git
 from .indexer import DEFAULT_MAX_FILE_BYTES, DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL, IndexResult, index_repository
 from .tracker import TrackerError, find_repo_root, track_repository
 from .terminal_markdown import render_markdown
@@ -99,6 +101,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--repo", type=Path, default=Path.cwd(), help="working directory (default: current directory)")
     run.add_argument("run_command", nargs=argparse.REMAINDER, help="command and arguments to run")
+    git_command = subparsers.add_parser("git", help="preflight and run Git push/pull")
+    git_command.add_argument("--repo", type=Path, default=Path.cwd(), help="repository (default: current directory)")
+    git_command.add_argument("git_operation", choices=("push", "pull"))
+    git_command.add_argument("git_args", nargs=argparse.REMAINDER, help="arguments forwarded to Git")
     failures = subparsers.add_parser("failures", help="show the repository's local failure history")
     failures.add_argument("--repo", type=Path, default=Path.cwd(), help="repository (default: current directory)")
     failures.add_argument("--all", action="store_true", help="include resolved incidents")
@@ -121,8 +127,9 @@ def _write_command_output(stream: TextIO, value: str) -> None:
 
 def _diagnose_failed_command(
     command: list[str], cwd: Path, stdout: str, stderr: str, exit_code: int,
-    incident: Incident | None = None,
-) -> None:
+    incident: Incident | None = None, *, allow_repair: bool = True,
+    allow_rerun: bool = True,
+) -> int | None:
     limit = 12_000
     combined_output = (
         f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
@@ -164,32 +171,229 @@ def _diagnose_failed_command(
             detail += f"; {hit.symbol}"
         print(f"[{hit.label}] {hit.path}:{hit.start_line}-{hit.end_line} (score {hit.score:.3f}{detail})")
     if not sys.stdin.isatty():
-        return
+        return None
     try:
         choice = input("\nCreate an error report under report/? [y/N]: ").strip().lower()
     except EOFError:
-        return
-    if choice not in {"y", "yes"}:
-        return
-    try:
-        report_path = create_error_report(
-            cwd,
-            command,
-            exit_code,
-            combined_output,
-            answer,
-            hits,
-            embedding_model,
-        )
-    except TrackerError as exc:
-        print(f"Could not create error report: {exc}", file=sys.stderr)
-        return
-    print(f"Error report saved to {report_path}")
-    if incident:
+        choice = ""
+    if choice in {"y", "yes"}:
         try:
-            save_report_path(cwd, incident.id, report_path)
+            report_path = create_error_report(
+                cwd,
+                command,
+                exit_code,
+                combined_output,
+                answer,
+                hits,
+                embedding_model,
+            )
         except TrackerError as exc:
-            print(f"Could not link report to Failure Atlas: {exc}", file=sys.stderr)
+            print(f"Could not create error report: {exc}", file=sys.stderr)
+        else:
+            print(f"Error report saved to {report_path}")
+            if incident:
+                try:
+                    save_report_path(cwd, incident.id, report_path)
+                except TrackerError as exc:
+                    print(f"Could not link report to Failure Atlas: {exc}", file=sys.stderr)
+    if not allow_repair:
+        return None
+    repaired_status = _offer_repair(
+        command, cwd, stdout, stderr, exit_code, answer, incident,
+        allow_rerun=allow_rerun,
+    )
+    if repaired_status is not None:
+        return repaired_status
+    return None
+
+
+def _offer_repair(
+    command: list[str], cwd: Path, stdout: str, stderr: str, exit_code: int,
+    diagnosis: str, incident: Incident | None, *, allow_rerun: bool = True,
+) -> int | None:
+    if not sys.stdin.isatty():
+        return None
+    try:
+        choice = input("\nAsk Codemate to inspect files and propose a code fix? [y/N]: ").strip().lower()
+    except EOFError:
+        return None
+    if choice not in {"y", "yes"}:
+        return None
+
+    current_stdout, current_stderr = stdout, stderr
+    current_exit = exit_code
+    current_diagnosis = diagnosis
+    current_incident = incident
+    for attempt in range(1, 4):
+        failure_output = f"stdout:\n{current_stdout}\n\nstderr:\n{current_stderr}"
+        try:
+            result = repair_repository(
+                "Propose the smallest safe code change that addresses this failure. Inspect the relevant "
+                "source files, explain your reasoning briefly, and stage a change only when repository "
+                "evidence supports it.",
+                cwd,
+                diagnosis=current_diagnosis,
+                command=command,
+                output=failure_output[-12_000:],
+            )
+        except TrackerError as exc:
+            print(f"Could not start the repair agent: {exc}", file=sys.stderr)
+            return None
+        print("\nCodemate repair analysis:")
+        print(render_markdown(result.message))
+        if not result.changes:
+            print("The agent did not stage a code change.")
+            return None
+        try:
+            diff = render_diff(result.changes)
+        except TrackerError as exc:
+            print(f"Could not show the proposed changes: {exc}", file=sys.stderr)
+            return None
+        print("\nProposed changes (not applied):\n")
+        print(diff)
+        try:
+            approval = input("Apply these exact changes? [y/N]: ").strip().lower()
+        except EOFError:
+            return None
+        if approval not in {"y", "yes"}:
+            print("Changes discarded.")
+            return None
+        try:
+            changed_paths = apply_changes(cwd, result.changes)
+        except TrackerError as exc:
+            print(f"Could not apply the reviewed changes: {exc}", file=sys.stderr)
+            return None
+        print(f"Applied: {', '.join(changed_paths)}")
+        if not allow_rerun:
+            print("Codemate left Git in control. Review the working tree, stage resolved files, then continue the merge or rebase as appropriate.")
+            return None
+        try:
+            rerun = input("Run the original command to check the fix? [Y/n]: ").strip().lower()
+        except EOFError:
+            return None
+        if rerun in {"n", "no"}:
+            return None
+
+        try:
+            process = subprocess.run(
+                command,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                check=False,
+            )
+            current_stdout, current_stderr, current_exit = process.stdout, process.stderr, process.returncode
+        except OSError as exc:
+            current_stdout, current_stderr, current_exit = "", str(exc), 127
+        _write_command_output(sys.stdout, current_stdout)
+        _write_command_output(sys.stderr, current_stderr)
+        if current_exit == 0:
+            if current_incident:
+                try:
+                    record_success(cwd, command)
+                except TrackerError:
+                    pass
+            print("Codemate verification: the command passed after the approved changes.")
+            return 0
+        if not current_stderr and not current_stdout:
+            current_stderr = f"Command exited with code {current_exit}."
+            print(current_stderr, file=sys.stderr)
+        if attempt == 3:
+            print("Repair limit reached after three reviewed attempts.")
+            return current_exit if current_exit > 0 else 128 + abs(current_exit)
+        try:
+            repo_root = find_repo_root(cwd.resolve())
+            if (repo_root / ".index" / "vectors.sqlite3").is_file():
+                index_repository(repo_root)
+            question = (
+                f"Diagnose the still-failing command {shlex.join(command)} (exit code {current_exit}) "
+                "after an approved repair. Re-check the current source rather than assuming the previous "
+                "diagnosis is correct.\n\nCommand output:\n"
+                f"stdout:\n{current_stdout}\n\nstderr:\n{current_stderr}"
+            )
+            current_diagnosis, hits, embedding_model = ask_repository(question, cwd)
+            print("\nUpdated Codemate diagnosis:")
+            print(render_markdown(current_diagnosis))
+            print(f"\nSources (retrieved locally with {embedding_model}):")
+            for hit in hits:
+                print(f"[{hit.label}] {hit.path}:{hit.start_line}-{hit.end_line} (score {hit.score:.3f})")
+            current_incident = record_failure(cwd, command, current_exit, f"stdout:\n{current_stdout}\n\nstderr:\n{current_stderr}")
+            if current_incident:
+                save_diagnosis(cwd, current_incident.id, current_diagnosis)
+        except TrackerError as exc:
+            print(f"Could not analyze the repeated failure: {exc}", file=sys.stderr)
+            return current_exit if current_exit > 0 else 128 + abs(current_exit)
+        try:
+            continue_choice = input("Ask the agent to inspect this new failure and propose another fix? [y/N]: ").strip().lower()
+        except EOFError:
+            return current_exit if current_exit > 0 else 128 + abs(current_exit)
+        if continue_choice not in {"y", "yes"}:
+            return current_exit if current_exit > 0 else 128 + abs(current_exit)
+    return current_exit if current_exit > 0 else 128 + abs(current_exit)
+
+
+def _analyze_git_preflight(preflight: GitPreflight, cwd: Path, operation: str) -> None:
+    if not preflight.note:
+        return
+    print(f"Codemate Git preflight: {preflight.note}", file=sys.stderr)
+    if not preflight.conflicts:
+        return
+    question = (
+        f"Analyze this Git {operation} preflight. Git preview found likely conflicts in: "
+        f"{', '.join(preflight.conflicts)}. Explain what the conflict means and suggest a safe way "
+        "to resolve it. Use only the supplied preview and retrieved repository excerpts; distinguish "
+        "facts from hypotheses and do not propose changing files automatically.\n\n"
+        f"Merge preview:\n{preflight.preview or '[No textual preview available.]'}"
+    )
+    try:
+        answer, hits, model = ask_repository(question, cwd)
+    except TrackerError as exc:
+        print(f"Could not add a repository-specific analysis: {exc}", file=sys.stderr)
+        return
+    print("\nCodemate conflict analysis:")
+    print(render_markdown(answer))
+    print(f"\nSources (retrieved locally with {model}):")
+    for hit in hits:
+        print(f"[{hit.label}] {hit.path}:{hit.start_line}-{hit.end_line} (score {hit.score:.3f})")
+
+
+def _run_guarded_git(cwd: Path, operation: str, git_args: list[str]) -> int:
+    try:
+        preflight = preflight_git(cwd, operation, git_args)
+    except (OSError, TrackerError) as exc:
+        preflight = GitPreflight(False, f"Preflight unavailable ({exc}); forwarding directly to Git.")
+    _analyze_git_preflight(preflight, cwd, operation)
+    command = ["git", operation, *git_args]
+    try:
+        process = subprocess.run(command, cwd=cwd, capture_output=True, text=True, errors="replace", check=False)
+        stdout, stderr, code = process.stdout, process.stderr, process.returncode
+    except OSError as exc:
+        stdout, stderr, code = "", str(exc), 127
+    _write_command_output(sys.stdout, stdout)
+    _write_command_output(sys.stderr, stderr)
+    if code == 0:
+        return 0
+    if not stderr and not stdout:
+        stderr = f"Git {operation} exited with code {code}."
+        print(stderr, file=sys.stderr)
+    try:
+        incident = record_failure(cwd, command, code, f"stdout:\n{stdout}\n\nstderr:\n{stderr}")
+    except TrackerError:
+        incident = None
+    failure_text = f"{stdout}\n{stderr}".casefold()
+    conflict_failure = bool(preflight.conflicts) or any(
+        marker in failure_text
+        for marker in ("conflict", "could not apply", "automatic merge failed", "fix conflicts")
+    )
+    # Push failures concern remote history or transport; source edits cannot fix them.
+    # Only pull failures that look like merge conflicts offer code repair; Git is never
+    # rerun automatically after such a proposal.
+    _diagnose_failed_command(
+        command, cwd, stdout, stderr, code, incident,
+        allow_repair=(operation == "pull" and conflict_failure), allow_rerun=False,
+    )
+    return code if code > 0 else 128 + abs(code)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -261,6 +465,8 @@ def main(argv: list[str] | None = None) -> int:
         if not command:
             print("codemate: error: provide a command to run, for example `codemate run pytest`", file=sys.stderr)
             return 2
+        if len(command) >= 2 and command[0] == "git" and command[1] in {"push", "pull"}:
+            return _run_guarded_git(args.repo, command[1], command[2:])
         try:
             result = subprocess.run(
                 command,
@@ -308,8 +514,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         except TrackerError as exc:
             print(f"Could not update Failure Atlas: {exc}", file=sys.stderr)
-        _diagnose_failed_command(command, args.repo, stdout, stderr, exit_code, incident)
+        repair_status = _diagnose_failed_command(command, args.repo, stdout, stderr, exit_code, incident)
+        if repair_status is not None:
+            return repair_status
         return exit_code if exit_code > 0 else 128 + abs(exit_code)
+    if args.command == "git":
+        return _run_guarded_git(args.repo, args.git_operation, args.git_args)
     if args.command == "init":
         try:
             current = load_config()

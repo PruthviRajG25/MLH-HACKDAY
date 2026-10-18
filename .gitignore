@@ -1,9 +1,35 @@
+# Local tracking data, embeddings, and incident history
 .index/
+
+# Generated diagnostic reports
 /report/
-__pycache__/
-*.py[cod]
-*.egg-info/
+
+# Environment variables and local secrets
 .env
 .env.*
 !.env.example
-tests/
+
+# Python bytecode and package artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test and tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+.idea/
